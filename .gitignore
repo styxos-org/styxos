@@ -1,3 +1,5 @@
 fs/*
 build/*
 initramfs*
+var.img
+overlay/usr/bin

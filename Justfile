@@ -1,74 +1,60 @@
 KERNEL_DIR := "kernel/src"
-KERNEL_VERSION := "6.8"
-CONFIG_SRC := "arch/x86/configs/styx_defconfig" # Pfad zu deiner gespeicherten Config anpassen
-IMAGE := "styxos.qcow2"
-MNT := "fs"
-NBD := "/dev/nbd0"
-ALPINE_URL := "https://dl-cdn.alpinelinux.org/alpine/v3.19/releases/x86_64/alpine-minirootfs-3.19.1-x86_64.tar.gz"
-PWD := `pwd`
+KERNEL_VERSION := "6.19"
+ALPINE_VERSION := "3.21.2"
 
-default:
-    @just --list
+# Install Container runtime (crun)
+insruntime:
+    -mkdir -p overlay/usr/bin
+    wget -nc -O overlay/usr/bin/crun https://github.com/containers/crun/releases/download/1.26/crun-1.26-linux-amd64
+    chmod +x overlay/usr/bin/crun
 
-# Upgrade kernel. Adjust KERNEL_VERSION in the Justfile.
-upgrade-kernel:
-    cd {{KERNEL_DIR}} && git fetch origin tag v{{KERNEL_VERSION}} --depth 1
-    cd {{KERNEL_DIR}} && git checkout v{{KERNEL_VERSION}}
-    cp {{CONFIG_SRC}} {{KERNEL_DIR}}/.config
-    make -C {{KERNEL_DIR}} olddefconfig
+# Make customized RAM file system (initramfs)
+initramfs:
+    -mkdir -p build fs
+    wget -nc -P build/ https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-{{ ALPINE_VERSION }}-x86_64.tar.gz || true
 
-# Initialize Submodule.
-sync:
-    git submodule update --init --depth 1 {{KERNEL_DIR}}
+    # Completely empty fs/ for clean, reproducible builds
+    -rm -rf fs/* fs/.[!.]*
+    tar xf build/alpine-minirootfs-{{ ALPINE_VERSION }}-x86_64.tar.gz -C fs/
+    -rm -rf fs/opt fs/mnt fs/usr/local fs/media
 
-# Configure and build kernel.
-build:
-    cp {{CONFIG_SRC}} {{KERNEL_DIR}}/.config
-    make -C {{KERNEL_DIR}} olddefconfig
-    make -C {{KERNEL_DIR}} -j$(nproc) bzImage modules
+    # Force the init symlink
+    ln -sf sbin/init fs/init
 
-# Build and mount image.
-mount:
-    qemu-img create -f qcow2 {{IMAGE}} 10G
-    sudo modprobe nbd max_part=8
-    sudo qemu-nbd -c {{NBD}} {{IMAGE}}
-    sudo parted -s {{NBD}} mklabel msdos mkpart primary ext4 1MiB 100%
-    sudo mkfs.ext4 {{NBD}}p1
-    mkdir -p {{MNT}}
-    sudo mount {{NBD}}p1 {{MNT}}
+    # Apply the StyxOS overlay
+    cp -a overlay/* fs/
 
-# Get root FS and install modules.
-bootstrap:
-    wget -qO alpine.tar.gz {{ALPINE_URL}}
-    sudo tar xzf alpine.tar.gz -C {{MNT}}
-    # Absolute Pfade für INSTALL_MOD_PATH nutzen, da make -C das Arbeitsverzeichnis ändert
-    sudo make -C {{KERNEL_DIR}} INSTALL_MOD_PATH={{PWD}}/{{MNT}} modules_install
-    rm alpine.tar.gz
+    # Pack the archive enforcing root ownership
+    cd fs && find . -print0 | cpio --null -ov -H newc --owner=root:root | gzip -9 > ../build/initramfs.cpio.gz
 
-# Chroot-Setup, Auto-Login and cleanup
-setup:
-    sudo cp /etc/resolv.conf {{MNT}}/etc/resolv.conf
-    sudo chroot {{MNT}} apk update
-    sudo chroot {{MNT}} apk add openrc
-    
-    echo "ttyS0::respawn:/bin/login -f root" | sudo tee -a {{MNT}}/etc/inittab > /dev/null
-    
-    sudo chroot {{MNT}} rc-update add devfs sysinit
-    sudo chroot {{MNT}} rc-update add dmesg sysinit
-    
-    sudo rm -rf {{MNT}}/sbin/apk {{MNT}}/lib/apk {{MNT}}/etc/apk {{MNT}}/var/cache/apk {{MNT}}/var/lib/apk
-    sudo rm -rf {{MNT}}/mnt {{MNT}}/media {{MNT}}/opt {{MNT}}/usr/local
+# Compile the configured kernel
+kernel:
+    cp kernel/styxos-kernel.cfg kernel/src/.config
+    cd kernel/src && make olddefconfig
+    cd kernel/src && make -j$(nproc) bzImage
+    cp kernel/src/arch/x86/boot/bzImage build
 
-# Unmount image.
-umount:
-    sudo umount {{MNT}} || true
-    sudo qemu-nbd -d {{NBD}} || true
+# Create disk image for /var mount
+mkvar:
+    mkdir -p build/var_skel
+    cp -a fs/var/* build/var_skel/ 2>/dev/null || true
+    mkdir -p build/var_skel/log
+    mkdir -p build/var_skel/lib/containers
 
-# start VM in headless mode.
+    truncate -s 1G var.img
+    # More flexible:
+    #qemu-img create -f raw var.img 1G
+    mkfs.ext4 -d build/var_skel var.img
+    rm -rf build/var_skel
+
+# Run compiled kernel in QEMU
 run:
     qemu-system-x86_64 \
-        -machine pc -accel kvm -m 2048 \
-        -drive file={{IMAGE}},format=qcow2,if=virtio \
-        -kernel {{KERNEL_DIR}}/arch/x86/boot/bzImage \
-        -append "root=/dev/vda1 rw console=ttyS0" \
-        -nographic
+        -kernel build/bzImage \
+        -initrd build/initramfs.cpio.gz \
+        -m 640 \
+        -nographic \
+        -netdev user,id=net0 \
+        -device virtio-net-pci,netdev=net0 \
+        -drive file=var.img,format=raw,if=virtio \
+        -append "console=ttyS0 quiet rdinit=/init"
