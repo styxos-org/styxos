@@ -1,0 +1,3 @@
+[submodule "kernel/src"]
+	path = kernel/src
+	url = https://github.com/torvalds/linux

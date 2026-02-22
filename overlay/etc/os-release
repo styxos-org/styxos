@@ -1,0 +1,6 @@
+NAME="StyxOS"
+ID=styxos
+VERSION_ID=0.0.1
+PRETTY_NAME="Styx Operating System v0.0.1"
+HOME_URL="https://styxos.org/"
+BUG_REPORT_URL="https://styxos.org/issues"
