@@ -1,3 +1,7 @@
+<div align="center">
+  <img src="logo.png" alt="StyxOS Logo" width="400" />
+</div>
+
 # StyxOS
 
 StyxOS is a minimal, completely immutable Linux distribution built from scratch. It is designed to run entirely from a ramdisk, providing a rudimentarily assembled yet highly cohesive environment. 
