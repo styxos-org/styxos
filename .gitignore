@@ -8,3 +8,4 @@ zig-out/
 release/
 debug/
 /docgen_tmp/
+target/
