@@ -16,6 +16,8 @@ title = 'StyxOS Documentation'
 [markup.goldmark.renderer]
     unsafe = true
 
+[params]
+  BookTheme = 'dark'
 
 #[server]
 #    port = 1313

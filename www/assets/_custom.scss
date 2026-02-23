@@ -37,16 +37,13 @@ h1, h2, h3, h4, h5, h6 {
   font-family: 'Roboto', sans-serif;
 }
 
-.book-menu-content {
-  background: #f5f5f5;
-}
-
 // Code-Blöcke relativ zum Copy-Button positionieren
 .highlight {
   position: relative;
 }
 
 .copy-button {
+  font-family: 'Roboto-Regular';
   position: absolute;
   top: 0.5rem;
   right: 0.5rem;
