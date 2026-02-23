@@ -379,9 +379,15 @@
     }
 
     .feature-icon {
-      font-size: 1.4rem;
       margin-bottom: 1.2rem;
       display: block;
+      color: var(--styx-cyan);
+      filter: drop-shadow(0 0 8px var(--styx-glow));
+    }
+
+    .feature-icon svg {
+      width: 28px;
+      height: 28px;
     }
 
     .feature-name {
@@ -630,7 +636,6 @@
 
   <!-- Hero -->
   <section class="hero">
-    <img src="/logo.png" alt="StyxOS Logo" class="hero-logo">
     <p class="hero-tagline">Linux &middot; Zig &middot; Containers</p>
     <h1>Bare Metal.<br><span>Pure OS.</span></h1>
     <p class="hero-description">
@@ -659,7 +664,7 @@
 
     <div class="features-grid">
       <div class="feature-card">
-        <span class="feature-icon">⚡</span>
+        <span class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="m12.83 2.18a2 2 0 0 0-1.66 0L2.6 6.08a1 1 0 0 0 0 1.83l8.58 3.91a2 2 0 0 0 1.66 0l8.58-3.9a1 1 0 0 0 0-1.83Z"/><path d="m22 17.65-9.17 4.16a2 2 0 0 1-1.66 0L2 17.65"/><path d="m22 12.65-9.17 4.16a2 2 0 0 1-1.66 0L2 12.65"/></svg></span>
         <h3 class="feature-name">Zig Userland</h3>
         <p class="feature-text">
           Init, shell, DNS, monitoring — all written in Zig.
@@ -667,7 +672,7 @@
         </p>
       </div>
       <div class="feature-card">
-        <span class="feature-icon">🔒</span>
+        <span class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg></span>
         <h3 class="feature-name">Minimal Attack Surface</h3>
         <p class="feature-text">
           No package manager. No unnecessary services.
@@ -675,7 +680,7 @@
         </p>
       </div>
       <div class="feature-card">
-        <span class="feature-icon">📦</span>
+        <span class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16Z"/><path d="m3.3 7 8.7 5 8.7-5"/><path d="M12 22V12"/></svg></span>
         <h3 class="feature-name">Container Native</h3>
         <p class="feature-text">
           Built to host OCI containers via crun.
@@ -683,7 +688,7 @@
         </p>
       </div>
       <div class="feature-card">
-        <span class="feature-icon">⚙️</span>
+        <span class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg></span>
         <h3 class="feature-name">Linux Kernel</h3>
         <p class="feature-text">
           Proven, stable, upstream Linux.
@@ -691,7 +696,7 @@
         </p>
       </div>
       <div class="feature-card">
-        <span class="feature-icon">🐚</span>
+        <span class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="4 17 10 11 4 5"/><line x1="12" x2="20" y1="19" y2="19"/></svg></span>
         <h3 class="feature-name">Zish Shell</h3>
         <p class="feature-text">
           A modern shell with SQLite persistence,
@@ -699,7 +704,7 @@
         </p>
       </div>
       <div class="feature-card">
-        <span class="feature-icon">🌐</span>
+        <span class="feature-icon"><svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></span>
         <h3 class="feature-name">Built-in DNS</h3>
         <p class="feature-text">
           Lightweight DNS resolver as part of the base system.
@@ -747,6 +752,7 @@
 
   <!-- CTA -->
   <section class="cta-section reveal">
+    <img src="/logo.png" alt="StyxOS Logo" class="hero-logo">
     <h2 class="cta-title">Cross the River</h2>
     <p class="cta-text">StyxOS is under active development. Contributions welcome.</p>
     <div class="hero-actions" style="justify-content: center;">
