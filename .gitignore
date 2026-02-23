@@ -3,3 +3,8 @@ build/*
 initramfs*
 var.img
 overlay/usr/bin
+.zig-cache/
+zig-out/
+release/
+debug/
+/docgen_tmp/
