@@ -445,6 +445,184 @@ const Db = struct {
             return error.SqliteInsertFailed;
         }
     }
+
+    /// Compress metrics older than `max_age_s` seconds into daily averages.
+    /// For each (kind, device, day) group, replaces all raw rows with a single
+    /// row containing averaged JSON values. The summary row gets ts = start of day.
+    fn compress(self: *Db, max_age_s: i64) !CompressResult {
+        const now = std.time.timestamp();
+        const cutoff = now - max_age_s;
+
+        // The approach:
+        // 1. For each (kind, device, day) group older than cutoff, compute averages
+        //    of all numeric JSON fields using json_extract + AVG()
+        // 2. Insert the summary rows with kind prefixed as "daily_" to distinguish
+        // 3. Delete the original raw rows
+        //
+        // We use different aggregation SQL per metric kind because each has
+        // different JSON fields. This is explicit and avoids dynamic JSON parsing.
+
+        var deleted: i64 = 0;
+        var inserted: i64 = 0;
+
+        _ = c.sqlite3_exec(self.handle, "BEGIN", null, null, null);
+
+        // --- CPU ---
+        deleted += try self.compressKind(cutoff,
+            \\INSERT INTO metrics (ts, kind, device, json)
+            \\SELECT MIN(ts), 'daily_cpu', device,
+            \\  printf('{"user":%.2f,"system":%.2f,"iowait":%.2f,"idle":%.2f,"samples":%d}',
+            \\    AVG(json_extract(json, '$.user')),
+            \\    AVG(json_extract(json, '$.system')),
+            \\    AVG(json_extract(json, '$.iowait')),
+            \\    AVG(json_extract(json, '$.idle')),
+            \\    COUNT(*))
+            \\FROM metrics
+            \\WHERE kind = 'cpu' AND ts < ?1
+            \\GROUP BY device, ts / 86400
+        ,
+            "DELETE FROM metrics WHERE kind = 'cpu' AND ts < ?1",
+            &inserted,
+        );
+
+        // --- Load ---
+        deleted += try self.compressKind(cutoff,
+            \\INSERT INTO metrics (ts, kind, device, json)
+            \\SELECT MIN(ts), 'daily_load', device,
+            \\  printf('{"avg1":%.2f,"avg5":%.2f,"avg15":%.2f,"running":%.1f,"total":%.1f,"samples":%d}',
+            \\    AVG(json_extract(json, '$.avg1')),
+            \\    AVG(json_extract(json, '$.avg5')),
+            \\    AVG(json_extract(json, '$.avg15')),
+            \\    AVG(json_extract(json, '$.running')),
+            \\    AVG(json_extract(json, '$.total')),
+            \\    COUNT(*))
+            \\FROM metrics
+            \\WHERE kind = 'load' AND ts < ?1
+            \\GROUP BY device, ts / 86400
+        ,
+            "DELETE FROM metrics WHERE kind = 'load' AND ts < ?1",
+            &inserted,
+        );
+
+        // --- Memory ---
+        deleted += try self.compressKind(cutoff,
+            \\INSERT INTO metrics (ts, kind, device, json)
+            \\SELECT MIN(ts), 'daily_mem', device,
+            \\  printf('{"total_kb":%.0f,"available_kb":%.0f,"used_kb":%.0f,"used_pct":%.1f,"buffers_kb":%.0f,"cached_kb":%.0f,"swap_total_kb":%.0f,"swap_free_kb":%.0f,"samples":%d}',
+            \\    AVG(json_extract(json, '$.total_kb')),
+            \\    AVG(json_extract(json, '$.available_kb')),
+            \\    AVG(json_extract(json, '$.used_kb')),
+            \\    AVG(json_extract(json, '$.used_pct')),
+            \\    AVG(json_extract(json, '$.buffers_kb')),
+            \\    AVG(json_extract(json, '$.cached_kb')),
+            \\    AVG(json_extract(json, '$.swap_total_kb')),
+            \\    AVG(json_extract(json, '$.swap_free_kb')),
+            \\    COUNT(*))
+            \\FROM metrics
+            \\WHERE kind = 'mem' AND ts < ?1
+            \\GROUP BY device, ts / 86400
+        ,
+            "DELETE FROM metrics WHERE kind = 'mem' AND ts < ?1",
+            &inserted,
+        );
+
+        // --- Network ---
+        deleted += try self.compressKind(cutoff,
+            \\INSERT INTO metrics (ts, kind, device, json)
+            \\SELECT MIN(ts), 'daily_net', device,
+            \\  printf('{"rx_bytes":%d,"tx_bytes":%d,"rx_rate":%.0f,"tx_rate":%.0f,"rx_packets":%d,"tx_packets":%d,"rx_errors":%d,"tx_errors":%d,"samples":%d}',
+            \\    MAX(json_extract(json, '$.rx_bytes')),
+            \\    MAX(json_extract(json, '$.tx_bytes')),
+            \\    AVG(json_extract(json, '$.rx_rate')),
+            \\    AVG(json_extract(json, '$.tx_rate')),
+            \\    MAX(json_extract(json, '$.rx_packets')),
+            \\    MAX(json_extract(json, '$.tx_packets')),
+            \\    MAX(json_extract(json, '$.rx_errors')),
+            \\    MAX(json_extract(json, '$.tx_errors')),
+            \\    COUNT(*))
+            \\FROM metrics
+            \\WHERE kind = 'net' AND ts < ?1
+            \\GROUP BY device, ts / 86400
+        ,
+            "DELETE FROM metrics WHERE kind = 'net' AND ts < ?1",
+            &inserted,
+        );
+
+        // --- Disk I/O ---
+        deleted += try self.compressKind(cutoff,
+            \\INSERT INTO metrics (ts, kind, device, json)
+            \\SELECT MIN(ts), 'daily_diskio', device,
+            \\  printf('{"reads":%d,"writes":%d,"read_bytes_s":%.0f,"write_bytes_s":%.0f,"read_ms":%d,"write_ms":%d,"samples":%d}',
+            \\    MAX(json_extract(json, '$.reads')),
+            \\    MAX(json_extract(json, '$.writes')),
+            \\    AVG(json_extract(json, '$.read_bytes_s')),
+            \\    AVG(json_extract(json, '$.write_bytes_s')),
+            \\    MAX(json_extract(json, '$.read_ms')),
+            \\    MAX(json_extract(json, '$.write_ms')),
+            \\    COUNT(*))
+            \\FROM metrics
+            \\WHERE kind = 'diskio' AND ts < ?1
+            \\GROUP BY device, ts / 86400
+        ,
+            "DELETE FROM metrics WHERE kind = 'diskio' AND ts < ?1",
+            &inserted,
+        );
+
+        // --- Disk Space ---
+        deleted += try self.compressKind(cutoff,
+            \\INSERT INTO metrics (ts, kind, device, json)
+            \\SELECT MIN(ts), 'daily_diskspace', device,
+            \\  printf('{"total":%d,"free":%.0f,"avail":%.0f,"used_pct":%.1f,"samples":%d}',
+            \\    MAX(json_extract(json, '$.total')),
+            \\    AVG(json_extract(json, '$.free')),
+            \\    AVG(json_extract(json, '$.avail')),
+            \\    AVG(json_extract(json, '$.used_pct')),
+            \\    COUNT(*))
+            \\FROM metrics
+            \\WHERE kind = 'diskspace' AND ts < ?1
+            \\GROUP BY device, ts / 86400
+        ,
+            "DELETE FROM metrics WHERE kind = 'diskspace' AND ts < ?1",
+            &inserted,
+        );
+
+        _ = c.sqlite3_exec(self.handle, "COMMIT", null, null, null);
+
+        return .{ .deleted = deleted, .inserted = inserted };
+    }
+
+    const CompressResult = struct {
+        deleted: i64,
+        inserted: i64,
+    };
+
+    fn compressKind(self: *Db, cutoff: i64, insert_sql: [*:0]const u8, delete_sql: [*:0]const u8, inserted: *i64) !i64 {
+        // Run the aggregation INSERT
+        var insert_stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(self.handle, insert_sql, -1, &insert_stmt, null) != c.SQLITE_OK) {
+            return error.SqlitePrepareFailed;
+        }
+        defer _ = c.sqlite3_finalize(insert_stmt);
+
+        _ = c.sqlite3_bind_int64(insert_stmt.?, 1, cutoff);
+        if (c.sqlite3_step(insert_stmt.?) != c.SQLITE_DONE) {
+            return error.SqliteInsertFailed;
+        }
+        inserted.* += c.sqlite3_changes(self.handle);
+
+        // Run the DELETE
+        var delete_stmt: ?*c.sqlite3_stmt = null;
+        if (c.sqlite3_prepare_v2(self.handle, delete_sql, -1, &delete_stmt, null) != c.SQLITE_OK) {
+            return error.SqlitePrepareFailed;
+        }
+        defer _ = c.sqlite3_finalize(delete_stmt);
+
+        _ = c.sqlite3_bind_int64(delete_stmt.?, 1, cutoff);
+        if (c.sqlite3_step(delete_stmt.?) != c.SQLITE_DONE) {
+            return error.SqliteInsertFailed;
+        }
+        return c.sqlite3_changes(self.handle);
+    }
 };
 
 // ============================================================================
@@ -522,10 +700,13 @@ fn formatMemJson(mem: MemInfo, buf: []u8) ![:0]const u8 {
 // ============================================================================
 
 const Config = struct {
-    db_path: [:0]const u8 = "/var/metrics.db",
+    db_path: [:0]const u8 = "/var/lib/sysmon/metrics.db",
     interval_s: u32 = 5,
     mounts: []const [:0]const u8 = &default_mounts,
+    mode: Mode = .collect,
+    compress_age_s: i64 = 86400, // 24h default
 
+    const Mode = enum { collect, compress };
     const default_mounts: [1][:0]const u8 = .{"/"};
 };
 
@@ -543,15 +724,26 @@ fn parseArgs() Config {
             if (args.next()) |val| {
                 config.interval_s = std.fmt.parseInt(u32, val, 10) catch 5;
             }
+        } else if (std.mem.eql(u8, arg, "-c") or std.mem.eql(u8, arg, "--compress")) {
+            config.mode = .compress;
+        } else if (std.mem.eql(u8, arg, "--max-age")) {
+            if (args.next()) |val| {
+                config.compress_age_s = std.fmt.parseInt(i64, val, 10) catch 86400;
+            }
         } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
             const help =
-                \\sysmon - System metrics collector
+                \\pluto - System metrics collector
                 \\
-                \\Usage: sysmon [OPTIONS]
+                \\Usage: pluto [OPTIONS]
+                \\
+                \\Modes:
+                \\  (default)         Collect metrics in a loop
+                \\  -c, --compress    Compress old metrics into daily averages, then exit
                 \\
                 \\Options:
                 \\  --db <path>       SQLite database path (default: /var/lib/sysmon/metrics.db)
                 \\  --interval <sec>  Collection interval in seconds (default: 5)
+                \\  --max-age <sec>   Compress metrics older than this (default: 86400 = 24h)
                 \\  -h, --help        Show this help
                 \\
             ;
@@ -571,15 +763,39 @@ pub fn main() !void {
     var stdout_writer = std.fs.File.stdout().writer(&stdout_buf);
     const stdout = &stdout_writer.interface;
 
-    try stdout.print("sysmon starting – db={s} interval={d}s\n", .{ config.db_path, config.interval_s });
-    try stdout.flush();
-
     // Open database
     var db = try Db.open(config.db_path.ptr);
     defer db.close();
 
-    try stdout.print("database opened, schema ready\n", .{});
-    try stdout.flush();
+    switch (config.mode) {
+        .compress => {
+            try stdout.print("compressing metrics older than {d}s...\n", .{config.compress_age_s});
+            try stdout.flush();
+
+            const result = try db.compress(config.compress_age_s);
+
+            try stdout.print("done: {d} raw rows deleted, {d} daily summaries created\n", .{ result.deleted, result.inserted });
+            try stdout.flush();
+
+            // VACUUM to reclaim space
+            _ = c.sqlite3_exec(db.handle, "VACUUM", null, null, null);
+
+            try stdout.print("database vacuumed\n", .{});
+            try stdout.flush();
+        },
+        .collect => {
+            try stdout.print("pluto starting – db={s} interval={d}s\n", .{ config.db_path, config.interval_s });
+            try stdout.flush();
+
+            try stdout.print("database opened, schema ready\n", .{});
+            try stdout.flush();
+
+            try collectLoop(&db, config, stdout);
+        },
+    }
+}
+
+fn collectLoop(db: *Db, config: Config, stdout: *std.Io.Writer) !void {
 
     // State for delta calculations
     var prev_cpu: ?CpuTimes = null;
@@ -592,9 +808,25 @@ pub fn main() !void {
     const interval_ns: u64 = @as(u64, config.interval_s) * std.time.ns_per_s;
     const interval_f: f64 = @floatFromInt(config.interval_s);
 
+    // Auto-compress: track which UTC day we last compressed
+    var last_compress_day: i64 = @divTrunc(std.time.timestamp(), 86400);
+
     // Collection loop
     while (true) {
         const ts = std.time.timestamp();
+        const current_day = @divTrunc(ts, 86400);
+
+        // New day → compress yesterday's (and older) raw data
+        if (current_day > last_compress_day) {
+            if (db.compress(config.compress_age_s)) |result| {
+                if (result.deleted > 0) {
+                    try stdout.print("auto-compress: {d} raw rows → {d} daily summaries\n", .{ result.deleted, result.inserted });
+                }
+            } else |err| {
+                try stdout.print("auto-compress error: {}\n", .{err});
+            }
+            last_compress_day = current_day;
+        }
 
         db.beginTransaction();
 
@@ -1063,4 +1295,104 @@ test "Db: integration – open, insert, verify" {
     const json_ptr = c.sqlite3_column_text(select_stmt.?, 0);
     const json_result = std.mem.span(json_ptr);
     try testing.expect(std.mem.indexOf(u8, json_result, "\"rx_rate\":10000") != null);
+}
+
+test "Db: compress – aggregate old rows into daily summaries" {
+    const db_path = "test_metrics.db";
+
+    var db = try Db.open(db_path);
+    defer db.close();
+
+    // Insert rows with timestamps 2 days in the past (clearly older than 24h)
+    const now = std.time.timestamp();
+    const old_ts = now - 2 * 86400; // 2 days ago
+    const old_ts2 = old_ts + 300; // 5 minutes later, same day
+
+    db.beginTransaction();
+
+    // Two CPU samples on the same old day → should become one daily_cpu row
+    try db.insertMetric(old_ts, "cpu", "",
+        \\{"user":20.00,"system":10.00,"iowait":2.00,"idle":68.00}
+    );
+    try db.insertMetric(old_ts2, "cpu", "",
+        \\{"user":30.00,"system":12.00,"iowait":4.00,"idle":54.00}
+    );
+
+    // Two load samples
+    try db.insertMetric(old_ts, "load", "",
+        \\{"avg1":1.00,"avg5":0.50,"avg15":0.25,"running":2,"total":200}
+    );
+    try db.insertMetric(old_ts2, "load", "",
+        \\{"avg1":3.00,"avg5":1.50,"avg15":0.75,"running":6,"total":400}
+    );
+
+    // One recent row that should NOT be compressed
+    try db.insertMetric(now, "cpu", "",
+        \\{"user":15.00,"system":5.00,"iowait":1.00,"idle":79.00}
+    );
+
+    db.commit();
+
+    // Run compress with max_age = 24h
+    const result = try db.compress(86400);
+
+    // Should have deleted old raw rows and created daily summaries
+    try testing.expect(result.deleted >= 4); // at least our 4 old rows
+    try testing.expect(result.inserted >= 2); // at least daily_cpu + daily_load
+
+    // Verify: recent cpu row still exists
+    {
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT COUNT(*) FROM metrics WHERE kind = 'cpu' AND ts = ?";
+        try testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        _ = c.sqlite3_bind_int64(stmt.?, 1, now);
+        try testing.expectEqual(c.SQLITE_ROW, c.sqlite3_step(stmt.?));
+        try testing.expectEqual(@as(c_int, 1), c.sqlite3_column_int(stmt.?, 0));
+    }
+
+    // Verify: daily_cpu summary exists with averaged values
+    {
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT json FROM metrics WHERE kind = 'daily_cpu' ORDER BY ts DESC LIMIT 1";
+        try testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try testing.expectEqual(c.SQLITE_ROW, c.sqlite3_step(stmt.?));
+
+        const json_ptr = c.sqlite3_column_text(stmt.?, 0);
+        const json_str = std.mem.span(json_ptr);
+        // AVG of user: (20+30)/2 = 25
+        try testing.expect(std.mem.indexOf(u8, json_str, "\"user\":25.00") != null);
+        // AVG of system: (10+12)/2 = 11
+        try testing.expect(std.mem.indexOf(u8, json_str, "\"system\":11.00") != null);
+        // samples count
+        try testing.expect(std.mem.indexOf(u8, json_str, "\"samples\":2") != null);
+    }
+
+    // Verify: daily_load summary exists with averaged values
+    {
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT json FROM metrics WHERE kind = 'daily_load' ORDER BY ts DESC LIMIT 1";
+        try testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        try testing.expectEqual(c.SQLITE_ROW, c.sqlite3_step(stmt.?));
+
+        const json_ptr = c.sqlite3_column_text(stmt.?, 0);
+        const json_str = std.mem.span(json_ptr);
+        // AVG of avg1: (1+3)/2 = 2
+        try testing.expect(std.mem.indexOf(u8, json_str, "\"avg1\":2.00") != null);
+        // AVG of running: (2+6)/2 = 4
+        try testing.expect(std.mem.indexOf(u8, json_str, "\"running\":4.0") != null);
+    }
+
+    // Verify: no raw old cpu rows remain
+    {
+        var stmt: ?*c.sqlite3_stmt = null;
+        const sql = "SELECT COUNT(*) FROM metrics WHERE kind = 'cpu' AND ts < ?";
+        try testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.handle, sql, -1, &stmt, null));
+        defer _ = c.sqlite3_finalize(stmt);
+        _ = c.sqlite3_bind_int64(stmt.?, 1, now - 86400);
+        try testing.expectEqual(c.SQLITE_ROW, c.sqlite3_step(stmt.?));
+        try testing.expectEqual(@as(c_int, 0), c.sqlite3_column_int(stmt.?, 0));
+    }
 }
