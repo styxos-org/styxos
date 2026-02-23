@@ -14,18 +14,41 @@ pub fn build(b: *std.Build) void {
         }),
     });
 
-    // Link GNU Readline and SQLite3
-    // On macOS, use Homebrew's GNU readline (not libedit)
-    const target_info = target.result;
-    if (target_info.os.tag == .macos) {
-        // Homebrew paths for Apple Silicon and Intel
-        exe.root_module.addSystemIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/readline/include" });
-        exe.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/readline/lib" });
-        exe.root_module.addIncludePath(.{ .cwd_relative = "/opt/homebrew/opt/sqlite/include" });
-        exe.root_module.addLibraryPath(.{ .cwd_relative = "/opt/homebrew/opt/sqlite/lib" });
-    }
-    exe.linkSystemLibrary("readline");
-    exe.linkSystemLibrary("sqlite3");
+    //
+    // Linenoise -- New in 0.1.0
+    //
+    exe.addIncludePath(b.path("lib/linenoise"));
+    exe.addCSourceFile(.{
+        .file = b.path("lib/linenoise/linenoise.c"),
+        .flags = &[_][]const u8{
+            "-Os", // Optimize Size
+        },
+    });
+
+    //
+    // SQLite3 static -- New in 0.1.0
+    //
+    exe.addIncludePath(b.path("lib/sqlite3"));
+    exe.addCSourceFile(.{
+        .file = b.path("lib/sqlite3/sqlite3.c"),
+        .flags = &[_][]const u8{
+            "-O2",
+
+            // WICHTIG für Shells:
+            // Da zish (wahrscheinlich) single-threaded läuft, können wir
+            // das ganze Mutex-Locking in SQLite abschalten. Macht es viel schneller.
+            "-DSQLITE_THREADSAFE=0",
+
+            // Sicherheit: Keine externen DLLs laden erlauben
+            "-DSQLITE_OMIT_LOAD_EXTENSION",
+
+            // Empfohlene Defaults
+            "-DSQLITE_DEFAULT_FOREIGN_KEYS=1",
+        },
+    });
+
+    // Linking libC for malloc/free
+    exe.linkLibC();
 
     b.installArtifact(exe);
 

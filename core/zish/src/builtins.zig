@@ -9,8 +9,6 @@ const Db = db_mod.Db;
 const c = @cImport({
     @cInclude("stdlib.h");
     @cInclude("stdio.h");
-    @cInclude("readline/readline.h");
-    @cInclude("readline/history.h");
 });
 
 var shell_db: *Db = undefined;

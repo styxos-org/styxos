@@ -1,19 +1,28 @@
+target := "zig-out/bin/zish"
 
-# Install requirements needed for building
-requirements:
-	sudo dnf install -y readline-devel sqlite-devel bats
 
-# Build production binary
-build:
-	@zig build -Doptimize=ReleaseSafe
+# Build for static LibC (Musl)
+@build:
+    zig build -Dtarget=x86_64-linux-musl -Doptimize=ReleaseSmall
+    strip {{ target }}
 
 # Run locally
-run:
-	@zig-out/bin/zish
+@run:
+	{{ target }}
 
 # Run end-to-end tests
 test:
 	@test/basic.bats
+
+# Create Manpage, needs Pandoc
+man:
+    @mkdir -p zig-out/share/man/man1
+    pandoc doc/zish.1.md -s -t man -o zig-out/share/man/man1/zish.1
+    @echo "Manpage created at zig-out/share/man/man1/zish.1"
+
+# Show Manpage as preview
+man-preview: man
+    man -l zig-out/share/man/man1/zish.1
 
 # Cleanup
 clean:

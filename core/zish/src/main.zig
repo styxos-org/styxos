@@ -14,8 +14,7 @@ const c = @cImport({
     @cInclude("stdlib.h");
     @cInclude("string.h");
     @cInclude("signal.h");
-    @cInclude("readline/readline.h");
-    @cInclude("readline/history.h");
+    @cInclude("linenoise.h");
 });
 
 // ── Globals ──────────────────────────────────────────────────────────
@@ -29,94 +28,115 @@ var self_exe_path: []const u8 = "zish";
 
 // ── Readline Setup ───────────────────────────────────────────────────
 
-fn setupReadline() void {
-    var b1 = "\"\\e[A\": history-search-backward".*;
-    var b2 = "\"\\e[B\": history-search-forward".*;
-    var b3 = "\"\\C-p\": history-search-backward".*;
-    var b4 = "\"\\C-n\": history-search-forward".*;
-    _ = c.rl_parse_and_bind(&b1);
-    _ = c.rl_parse_and_bind(&b2);
-    _ = c.rl_parse_and_bind(&b3);
-    _ = c.rl_parse_and_bind(&b4);
-
-    // Set up tab completion
-    c.rl_attempted_completion_function = &zishCompletion;
+fn setupLinenoise() void {
+    c.linenoiseSetCompletionCallback(zishCompletion);
+    _ = c.linenoiseHistorySetMaxLen(5000);
 }
 
 // ── Tab Completion ───────────────────────────────────────────────────
 
-fn zishCompletion(text: [*c]const u8, start: c_int, _: c_int) callconv(.c) [*c][*c]u8 {
-    if (start == 0) {
-        // First word: complete builtins and aliases
-        const result = c.rl_completion_matches(text, &commandGenerator);
-        if (result != null) return result;
+// Hilfsfunktion: Findet das letzte Wort (durch Leerzeichen getrennt)
+fn findLastWord(text: []const u8) struct { prefix: []const u8, word: []const u8 } {
+    if (text.len == 0) return .{ .prefix = "", .word = "" };
+
+    // Suche das letzte Leerzeichen
+    var i: usize = text.len;
+    while (i > 0) {
+        i -= 1;
+        if (text[i] == ' ') {
+            return .{
+                .prefix = text[0 .. i + 1], // Inklusive Leerzeichen: "ls "
+                .word = text[i + 1 ..], // Das Fragment: "myfi"
+            };
+        }
     }
-    // Not first word or no matches: let readline do filename completion
-    // Return null pointer (as non-optional type)
-    return @ptrFromInt(0);
+    // Kein Leerzeichen gefunden -> Das ganze Ding ist das Wort (z.B. erster Befehl)
+    return .{ .prefix = "", .word = text };
 }
 
-/// Generator function called repeatedly by readline to get matches.
-/// On first call (state=0), initialize. Return next match or null when done.
-fn commandGenerator(text: [*c]const u8, state: c_int) callconv(.c) [*c]u8 {
-    const State = struct {
-        var builtin_index: usize = 0;
-        var alias_list: ?std.ArrayList(db_mod.AliasEntry) = null;
-        var alias_index: usize = 0;
-    };
+fn completeFiles(arena: std.mem.Allocator, lc: [*c]c.linenoiseCompletions, line_prefix: []const u8, path_fragment: []const u8) !void {
+    // 1. Zerlege Fragment in Verzeichnis und Dateiname
+    // Bsp: "src/ma" -> dir: "src", name_start: "ma"
+    // Bsp: "ma"     -> dir: ".",   name_start: "ma"
+    var search_dir_path: []const u8 = ".";
+    var name_start: []const u8 = path_fragment;
 
-    const prefix = std.mem.sliceTo(text, 0);
+    if (std.mem.lastIndexOf(u8, path_fragment, "/")) |idx| {
+        if (idx == 0) {
+            search_dir_path = "/";
+        } else {
+            search_dir_path = path_fragment[0..idx];
+        }
+        // Alles nach dem Slash ist der Filter für den Dateinamen
+        if (idx + 1 < path_fragment.len) {
+            name_start = path_fragment[idx + 1 ..];
+        } else {
+            name_start = "";
+        }
+    }
 
-    if (state == 0) {
-        // Reset iteration
-        State.builtin_index = 0;
-        // Free previous alias list if any
-        if (State.alias_list) |*list| {
-            for (list.items) |entry| {
-                allocator.free(entry.name);
-                allocator.free(entry.command);
+    // 2. Verzeichnis öffnen (Fehler ignorieren, falls Pfad ungültig)
+    var dir = std.fs.cwd().openDir(search_dir_path, .{ .iterate = true }) catch return;
+    defer dir.close();
+
+    var iter = dir.iterate();
+    while (try iter.next()) |entry| {
+        // 3. Filter: Beginnt der Dateiname mit dem Fragment?
+        // Bsp: "main.zig" beginnt mit "ma"?
+        if (std.mem.startsWith(u8, entry.name, name_start)) {
+            // Versteckte Dateien (.git) ignorieren, außer man hat '.' getippt
+            if (entry.name.len > 0 and entry.name[0] == '.' and name_start.len == 0) continue;
+
+            // 4. Pfad zusammenbauen
+            // Wenn search_dir "." ist, wollen wir das nicht im Output ("ma" -> "main.zig")
+            // Wenn search_dir "src" ist, brauchen wir es ("src/ma" -> "src/main.zig")
+            var suggestion: []u8 = undefined;
+
+            const is_dir = (entry.kind == .directory);
+            const suffix = if (is_dir) "/" else "";
+
+            if (std.mem.eql(u8, search_dir_path, ".")) {
+                suggestion = try std.fmt.allocPrint(arena, "{s}{s}{s}", .{ line_prefix, entry.name, suffix });
+            } else if (std.mem.eql(u8, search_dir_path, "/")) {
+                suggestion = try std.fmt.allocPrint(arena, "{s}/{s}{s}", .{ line_prefix, entry.name, suffix });
+            } else {
+                suggestion = try std.fmt.allocPrint(arena, "{s}{s}/{s}{s}", .{ line_prefix, search_dir_path, entry.name, suffix });
             }
-            list.deinit(allocator);
-        }
-        State.alias_list = null;
-        State.alias_index = 0;
 
-        // Load aliases from DB
-        if (db_initialized) {
-            State.alias_list = shell_db.getAllAliases() catch null;
+            // 5. An Linenoise übergeben
+            c.linenoiseAddCompletion(lc, suggestion.ptr);
         }
     }
-
-    // Try builtins first
-    const names = builtins.getBuiltinNames();
-    while (State.builtin_index < names.len) {
-        const name = names[State.builtin_index].name;
-        State.builtin_index += 1;
-        if (prefix.len == 0 or std.mem.startsWith(u8, name, prefix)) {
-            // readline expects malloc'd strings (it will free them)
-            const cname = allocator.dupeZ(u8, name) catch continue;
-            defer allocator.free(cname);
-            const dup = c.strdup(cname.ptr) orelse continue;
-            return dup;
-        }
-    }
-
-    // Then try aliases
-    if (State.alias_list) |list| {
-        while (State.alias_index < list.items.len) {
-            const name = list.items[State.alias_index].name;
-            State.alias_index += 1;
-            if (prefix.len == 0 or std.mem.startsWith(u8, name, prefix)) {
-                const cname = allocator.dupeZ(u8, name) catch continue;
-                defer allocator.free(cname);
-                const dup = c.strdup(cname.ptr) orelse continue;
-                return dup;
-            }
-        }
-    }
-
-    return @ptrFromInt(0);
 }
+
+fn zishCompletion(buf: [*c]const u8, lc: [*c]c.linenoiseCompletions) callconv(.c) void {
+    // Arena für temporäre Strings während der Completion
+    // Linenoise kopiert die Strings (strdup), also können wir unsere danach wegwerfen.
+    var arena_state = std.heap.ArenaAllocator.init(std.heap.page_allocator);
+    defer arena_state.deinit();
+    const arena = arena_state.allocator();
+
+    const line = std.mem.sliceTo(buf, 0);
+    const parts = findLastWord(line);
+
+    // 1. Builtins/Aliases prüfen (nur wenn wir am Anfang der Zeile sind oder nach Pipe/Semikolon etc. - hier vereinfacht)
+    if (parts.prefix.len == 0) {
+        const builtins_list = builtins.getBuiltinNames();
+        for (builtins_list) |b| {
+            if (std.mem.startsWith(u8, b.name, parts.word)) {
+                // Bei Builtins einfach den Namen adden
+                const completion = std.fmt.allocPrint(arena, "{s} ", .{b.name}) catch continue;
+                c.linenoiseAddCompletion(lc, completion.ptr);
+            }
+        }
+        // Aliases könnten hier auch hin
+    }
+
+    // 2. Datei-Completion (immer versuchen)
+    completeFiles(arena, lc, parts.prefix, parts.word) catch {};
+}
+
+// ── Initialize from DB ───────────────────────────────────────────────────
 
 fn loadHistoryFromDb() void {
     if (!db_initialized) return;
@@ -131,7 +151,7 @@ fn loadHistoryFromDb() void {
     for (entries.items) |entry| {
         const cstr = allocator.dupeZ(u8, entry.command) catch continue;
         defer allocator.free(cstr);
-        _ = c.add_history(cstr.ptr);
+        _ = c.linenoiseHistoryAdd(cstr.ptr);
     }
 }
 
@@ -156,7 +176,7 @@ fn loadEnvFromDb() void {
 
 // ── Prompt ────────────────────────────────────────────────────────────
 
-const default_ps1 = "\\!\\e[1;32m\\u\\e[0m:\\e[1;34m\\w\\e[0m$ ";
+const default_ps1 = "\\!\\e[1;32m\\u\\e[0m:\\e[1;34m\\w\\e[0m";
 
 fn buildPrompt(buf: []u8) []const u8 {
     const template = builtins.getConfig("PS1", default_ps1);
@@ -432,16 +452,7 @@ fn executeOneLine(line: []const u8) i32 {
 }
 
 fn runShellLoop() void {
-    setupReadline();
-
-    // Let readline handle signals (SIGINT etc.) - this is the default,
-    // but set it explicitly to be clear. Readline will clean up the
-    // terminal state and throw rl_readline_state on Ctrl-C.
-    // remove for macOS compat.
-    // c.rl_catch_signals = 1;
-
-    // Set a custom SIGINT handler that tells readline to abort the current line
-    _ = c.signal(c.SIGINT, &handleSigint);
+    setupLinenoise();
 
     var prompt_buf: [1024]u8 = undefined;
 
@@ -450,13 +461,25 @@ fn runShellLoop() void {
         const cprompt = allocator.dupeZ(u8, prompt) catch continue;
         defer allocator.free(cprompt);
 
-        const line_ptr = c.readline(cprompt.ptr);
+        // Getting Stdout since Zig 0.15.2
+        var stdout_buffer: [1024]u8 = undefined;
+        var stdout_writer = std.fs.File.stdout().writer(&stdout_buffer);
+        const stdout = &stdout_writer.interface;
+        stdout.writeAll(prompt) catch {};
+        stdout.flush() catch {};
+
+        // Hand over to Linenoise
+        const line_ptr = c.linenoise(">> ");
+
         if (line_ptr == null) {
+            // Trusting Signal Handler
             if (sigint_received) {
                 sigint_received = false;
+                std.debug.print("^C\n", .{});
                 continue;
             }
-            std.debug.print("\n", .{});
+
+            // No signal -> EOL
             break;
         }
         sigint_received = false;
@@ -469,7 +492,7 @@ fn runShellLoop() void {
             continue;
         }
 
-        _ = c.add_history(line_cstr);
+        _ = c.linenoiseHistoryAdd(line_cstr);
 
         // Per-line arena: all allocations for parsing/expansion are freed in one shot
         var arena = std.heap.ArenaAllocator.init(allocator);
@@ -501,6 +524,6 @@ fn runShellLoop() void {
             shell_db.addHistory(line, cwd, last_exit_code) catch {};
         }
 
-        c.free(line_ptr);
+        c.linenoiseFree(line_ptr);
     }
 }
