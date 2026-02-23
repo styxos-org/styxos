@@ -111,7 +111,10 @@ fn readProcFile(path: []const u8, buf: []u8) ![]const u8 {
 fn parseCpuTimes() !CpuTimes {
     var buf: [4096]u8 = undefined;
     const content = try readProcFile("/proc/stat", &buf);
+    return parseCpuTimesFromContent(content);
+}
 
+fn parseCpuTimesFromContent(content: []const u8) !CpuTimes {
     // First line: "cpu  user nice system idle iowait irq softirq steal guest guest_nice"
     var lines = std.mem.splitScalar(u8, content, '\n');
     const first_line = lines.first();
@@ -158,7 +161,10 @@ fn computeCpuUsage(prev: CpuTimes, curr: CpuTimes) CpuUsage {
 fn parseLoadAvg() !LoadAvg {
     var buf: [256]u8 = undefined;
     const content = try readProcFile("/proc/loadavg", &buf);
+    return parseLoadAvgFromContent(content);
+}
 
+fn parseLoadAvgFromContent(content: []const u8) !LoadAvg {
     // Format: "0.12 0.34 0.56 2/345 6789"
     var fields = std.mem.tokenizeScalar(u8, std.mem.trimRight(u8, content, "\n"), ' ');
 
@@ -184,7 +190,10 @@ fn parseLoadAvg() !LoadAvg {
 fn parseNetStats(out: []NetStats) !usize {
     var buf: [8192]u8 = undefined;
     const content = try readProcFile("/proc/net/dev", &buf);
+    return parseNetStatsFromContent(content, out);
+}
 
+fn parseNetStatsFromContent(content: []const u8, out: []NetStats) !usize {
     var lines = std.mem.splitScalar(u8, content, '\n');
     _ = lines.next(); // skip header 1
     _ = lines.next(); // skip header 2
@@ -228,7 +237,10 @@ fn parseNetStats(out: []NetStats) !usize {
 fn parseDiskStats(out: []DiskIo) !usize {
     var buf: [8192]u8 = undefined;
     const content = try readProcFile("/proc/diskstats", &buf);
+    return parseDiskStatsFromContent(content, out);
+}
 
+fn parseDiskStatsFromContent(content: []const u8, out: []DiskIo) !usize {
     var lines = std.mem.splitScalar(u8, content, '\n');
     var count: usize = 0;
 
@@ -317,7 +329,10 @@ fn getDiskSpaceC(mount_path: [*:0]const u8) !DiskSpace {
 fn parseMemInfo() !MemInfo {
     var buf: [4096]u8 = undefined;
     const content = try readProcFile("/proc/meminfo", &buf);
+    return parseMemInfoFromContent(content);
+}
 
+fn parseMemInfoFromContent(content: []const u8) !MemInfo {
     var result: MemInfo = std.mem.zeroes(MemInfo);
 
     var lines = std.mem.splitScalar(u8, content, '\n');
@@ -507,7 +522,7 @@ fn formatMemJson(mem: MemInfo, buf: []u8) ![:0]const u8 {
 // ============================================================================
 
 const Config = struct {
-    db_path: [:0]const u8 = "/var/lib/sysmon/metrics.db",
+    db_path: [:0]const u8 = "/var/metrics.db",
     interval_s: u32 = 5,
     mounts: []const [:0]const u8 = &default_mounts,
 
@@ -717,4 +732,335 @@ fn bufZ(buf: []u8, src: []const u8) [*:0]const u8 {
     @memcpy(buf[0..len], src[0..len]);
     buf[len] = 0;
     return @ptrCast(buf[0..len :0]);
+}
+
+// ============================================================================
+// Tests
+// ============================================================================
+
+const testing = std.testing;
+
+test "parseCpuTimes: basic /proc/stat" {
+    const content =
+        \\cpu  10132153 290696 3084719 46828483 16683 0 25195 0 0 0
+        \\cpu0 1393280 32966 572056 13343292 6130 0 17875 0 0 0
+    ;
+    const cpu = try parseCpuTimesFromContent(content);
+    try testing.expectEqual(@as(u64, 10132153), cpu.user);
+    try testing.expectEqual(@as(u64, 290696), cpu.nice);
+    try testing.expectEqual(@as(u64, 3084719), cpu.system);
+    try testing.expectEqual(@as(u64, 46828483), cpu.idle);
+    try testing.expectEqual(@as(u64, 16683), cpu.iowait);
+    try testing.expectEqual(@as(u64, 0), cpu.irq);
+    try testing.expectEqual(@as(u64, 25195), cpu.softirq);
+
+    const expected_total: u64 = 10132153 + 290696 + 3084719 + 46828483 + 16683 + 0 + 25195;
+    try testing.expectEqual(expected_total, cpu.total);
+}
+
+test "parseCpuTimes: reject invalid header" {
+    const content = "wrong_header 123 456";
+    try testing.expectError(error.ParseError, parseCpuTimesFromContent(content));
+}
+
+test "computeCpuUsage: 50% user, 25% system, 25% idle" {
+    const prev = CpuTimes{
+        .user = 100, .nice = 0, .system = 0, .idle = 100,
+        .iowait = 0, .irq = 0, .softirq = 0, .total = 200,
+    };
+    const curr = CpuTimes{
+        .user = 200, .nice = 0, .system = 50, .idle = 150,
+        .iowait = 0, .irq = 0, .softirq = 0, .total = 400,
+    };
+    const usage = computeCpuUsage(prev, curr);
+    try testing.expectApproxEqAbs(@as(f64, 50.0), usage.user_pct, 0.01);
+    try testing.expectApproxEqAbs(@as(f64, 25.0), usage.system_pct, 0.01);
+    try testing.expectApproxEqAbs(@as(f64, 25.0), usage.idle_pct, 0.01);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), usage.iowait_pct, 0.01);
+}
+
+test "computeCpuUsage: zero delta returns 100% idle" {
+    const same = CpuTimes{
+        .user = 100, .nice = 0, .system = 50, .idle = 50,
+        .iowait = 0, .irq = 0, .softirq = 0, .total = 200,
+    };
+    const usage = computeCpuUsage(same, same);
+    try testing.expectApproxEqAbs(@as(f64, 100.0), usage.idle_pct, 0.01);
+    try testing.expectApproxEqAbs(@as(f64, 0.0), usage.user_pct, 0.01);
+}
+
+test "parseLoadAvg: standard format" {
+    const content = "0.72 0.48 0.36 3/412 9876\n";
+    const load = try parseLoadAvgFromContent(content);
+    try testing.expectApproxEqAbs(@as(f64, 0.72), load.avg1, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 0.48), load.avg5, 0.001);
+    try testing.expectApproxEqAbs(@as(f64, 0.36), load.avg15, 0.001);
+    try testing.expectEqual(@as(u32, 3), load.running);
+    try testing.expectEqual(@as(u32, 412), load.total);
+}
+
+test "parseLoadAvg: high load values" {
+    const content = "12.50 8.25 4.10 15/1024 31337\n";
+    const load = try parseLoadAvgFromContent(content);
+    try testing.expectApproxEqAbs(@as(f64, 12.50), load.avg1, 0.001);
+    try testing.expectEqual(@as(u32, 15), load.running);
+    try testing.expectEqual(@as(u32, 1024), load.total);
+}
+
+test "parseNetStats: multiple interfaces, skip lo" {
+    const content =
+        \\Inter-|   Receive                                                |  Transmit
+        \\ face |bytes    packets errs drop fifo frame compressed multicast|bytes    packets errs drop fifo colls carrier compressed
+        \\    lo: 1234567   12345    0    0    0     0          0         0  1234567   12345    0    0    0     0       0          0
+        \\  eth0: 9876543   54321   10    5    0     0          0         0  5432109   43210    2    0    0     0       0          0
+        \\wlan0:  3456789   23456    0    0    0     0          0         0  2345678   12345    0    0    0     0       0          0
+    ;
+    var out: [16]NetStats = undefined;
+    const count = try parseNetStatsFromContent(content, &out);
+    try testing.expectEqual(@as(usize, 2), count); // lo skipped
+
+    // eth0
+    try testing.expectEqualStrings("eth0", out[0].ifaceName());
+    try testing.expectEqual(@as(u64, 9876543), out[0].rx_bytes);
+    try testing.expectEqual(@as(u64, 5432109), out[0].tx_bytes);
+    try testing.expectEqual(@as(u64, 54321), out[0].rx_packets);
+    try testing.expectEqual(@as(u64, 43210), out[0].tx_packets);
+    try testing.expectEqual(@as(u64, 10), out[0].rx_errors);
+    try testing.expectEqual(@as(u64, 2), out[0].tx_errors);
+
+    // wlan0
+    try testing.expectEqualStrings("wlan0", out[1].ifaceName());
+    try testing.expectEqual(@as(u64, 3456789), out[1].rx_bytes);
+}
+
+test "parseDiskStats: filter partitions and loops" {
+    const content =
+        \\   8       0 sda 12345 1234 567890 12345 54321 4321 987654 54321 0 12345 66666
+        \\   8       1 sda1 6789 567 234567 6789 23456 1234 456789 23456 0 6789 30245
+        \\   7       0 loop0 100 0 200 10 0 0 0 0 0 10 10
+        \\ 259       0 nvme0n1 99999 5000 888888 50000 77777 3000 666666 40000 0 30000 90000
+        \\ 259       1 nvme0n1p1 44444 2000 333333 20000 33333 1000 222222 10000 0 15000 30000
+        \\ 253       0 dm-0 55555 0 444444 25000 44444 0 333333 20000 0 20000 45000
+    ;
+    var out: [16]DiskIo = undefined;
+    const count = try parseDiskStatsFromContent(content, &out);
+    try testing.expectEqual(@as(usize, 3), count); // sda, nvme0n1, dm-0
+
+    try testing.expectEqualStrings("sda", out[0].deviceName());
+    try testing.expectEqual(@as(u64, 12345), out[0].reads_completed);
+    try testing.expectEqual(@as(u64, 567890), out[0].sectors_read);
+
+    try testing.expectEqualStrings("nvme0n1", out[1].deviceName());
+    try testing.expectEqual(@as(u64, 99999), out[1].reads_completed);
+
+    try testing.expectEqualStrings("dm-0", out[2].deviceName());
+    try testing.expectEqual(@as(u64, 55555), out[2].reads_completed);
+}
+
+test "isPartition: classification" {
+    // Whole disks
+    try testing.expect(!isPartition("sda"));
+    try testing.expect(!isPartition("vda"));
+    try testing.expect(!isPartition("nvme0n1"));
+    try testing.expect(!isPartition("dm-0"));
+    try testing.expect(!isPartition("dm-3"));
+
+    // Partitions
+    try testing.expect(isPartition("sda1"));
+    try testing.expect(isPartition("sda12"));
+    try testing.expect(isPartition("vda1"));
+    try testing.expect(isPartition("nvme0n1p1"));
+    try testing.expect(isPartition("nvme0n1p2"));
+
+    // Skip
+    try testing.expect(isPartition("loop0"));
+    try testing.expect(isPartition("loop1"));
+    try testing.expect(isPartition("ram0"));
+}
+
+test "parseMemInfo: standard format" {
+    const content =
+        \\MemTotal:       16384000 kB
+        \\MemFree:         2048000 kB
+        \\MemAvailable:    8192000 kB
+        \\Buffers:          512000 kB
+        \\Cached:          4096000 kB
+        \\SwapCached:        12345 kB
+        \\Active:          6000000 kB
+        \\Inactive:        3000000 kB
+        \\SwapTotal:       2097152 kB
+        \\SwapFree:        1048576 kB
+    ;
+    const mem = try parseMemInfoFromContent(content);
+    try testing.expectEqual(@as(u64, 16384000), mem.total_kb);
+    try testing.expectEqual(@as(u64, 2048000), mem.free_kb);
+    try testing.expectEqual(@as(u64, 8192000), mem.available_kb);
+    try testing.expectEqual(@as(u64, 512000), mem.buffers_kb);
+    try testing.expectEqual(@as(u64, 4096000), mem.cached_kb);
+    try testing.expectEqual(@as(u64, 2097152), mem.swap_total_kb);
+    try testing.expectEqual(@as(u64, 1048576), mem.swap_free_kb);
+}
+
+test "formatCpuJson: valid output" {
+    const usage = CpuUsage{ .user_pct = 25.5, .system_pct = 10.3, .iowait_pct = 2.1, .idle_pct = 62.1 };
+    var buf: [512]u8 = undefined;
+    const json = try formatCpuJson(usage, &buf);
+    // Verify it contains the key fields
+    try testing.expect(std.mem.indexOf(u8, json, "\"user\":") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"system\":") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"idle\":") != null);
+}
+
+test "formatLoadJson: valid output" {
+    const load = LoadAvg{ .avg1 = 1.5, .avg5 = 0.8, .avg15 = 0.3, .running = 4, .total = 300 };
+    var buf: [512]u8 = undefined;
+    const json = try formatLoadJson(load, &buf);
+    try testing.expect(std.mem.indexOf(u8, json, "\"avg1\":") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"running\":4") != null);
+}
+
+test "formatMemJson: used_pct calculation" {
+    const mem = MemInfo{
+        .total_kb = 16000000,
+        .free_kb = 2000000,
+        .available_kb = 8000000,
+        .buffers_kb = 500000,
+        .cached_kb = 4000000,
+        .swap_total_kb = 2000000,
+        .swap_free_kb = 1000000,
+    };
+    var buf: [1024]u8 = undefined;
+    const json = try formatMemJson(mem, &buf);
+    // used_pct = (16M - 8M) / 16M * 100 = 50.0
+    try testing.expect(std.mem.indexOf(u8, json, "\"used_pct\":50.0") != null);
+}
+
+test "formatNetJson: rate calculation with previous sample" {
+    const prev = NetStats{
+        .iface = [_]u8{0} ** 32,
+        .iface_len = 4,
+        .rx_bytes = 1000000,
+        .tx_bytes = 500000,
+        .rx_packets = 1000,
+        .tx_packets = 500,
+        .rx_errors = 0,
+        .tx_errors = 0,
+    };
+    var curr = prev;
+    curr.rx_bytes = 1050000; // +50000 in 5s = 10000 bytes/s
+    curr.tx_bytes = 525000; // +25000 in 5s = 5000 bytes/s
+
+    var buf: [1024]u8 = undefined;
+    const json = try formatNetJson(&curr, &prev, 5.0, &buf);
+    try testing.expect(std.mem.indexOf(u8, json, "\"rx_rate\":10000") != null);
+    try testing.expect(std.mem.indexOf(u8, json, "\"tx_rate\":5000") != null);
+}
+
+test "formatDiskIoJson: rate calculation" {
+    const prev = DiskIo{
+        .device = [_]u8{0} ** 32,
+        .device_len = 3,
+        .reads_completed = 1000,
+        .reads_merged = 100,
+        .sectors_read = 20000, // 20000 * 512 = ~10MB
+        .time_reading_ms = 5000,
+        .writes_completed = 500,
+        .writes_merged = 50,
+        .sectors_written = 10000,
+        .time_writing_ms = 3000,
+    };
+    var curr = prev;
+    curr.sectors_read = 22000; // +2000 sectors in 5s = 2000*512/5 = 204800 bytes/s
+    curr.sectors_written = 11000;
+
+    var buf: [1024]u8 = undefined;
+    const json = try formatDiskIoJson(&curr, &prev, 5.0, &buf);
+    try testing.expect(std.mem.indexOf(u8, json, "\"read_bytes_s\":204800") != null);
+}
+
+test "DiskSpace.usedPct: calculation" {
+    var space: DiskSpace = undefined;
+    space.total_bytes = 1000000000; // 1GB
+    space.free_bytes = 300000000; // 300MB
+    space.avail_bytes = 250000000;
+    space.mount_len = 1;
+    space.mount[0] = '/';
+
+    // used = 700M / 1G = 70%
+    try testing.expectApproxEqAbs(@as(f64, 70.0), space.usedPct(), 0.01);
+}
+
+test "DiskSpace.usedPct: zero total" {
+    var space: DiskSpace = undefined;
+    space.total_bytes = 0;
+    space.free_bytes = 0;
+    space.avail_bytes = 0;
+    space.mount_len = 0;
+    try testing.expectApproxEqAbs(@as(f64, 0.0), space.usedPct(), 0.01);
+}
+
+test "bufZ: null termination" {
+    var buf: [8]u8 = undefined;
+    const result = bufZ(&buf, "hello");
+    try testing.expectEqualStrings("hello", std.mem.span(result));
+}
+
+test "bufZ: truncation on overflow" {
+    var buf: [4]u8 = undefined;
+    const result = bufZ(&buf, "longstring");
+    try testing.expectEqual(@as(usize, 3), std.mem.span(result).len);
+}
+
+test "Db: integration – open, insert, verify" {
+    const db_path = "test_metrics.db";
+
+    // Open (creates file if not exists, re-runs schema with IF NOT EXISTS)
+    var db = try Db.open(db_path);
+    defer db.close();
+
+    const ts = std.time.timestamp();
+
+    db.beginTransaction();
+
+    // Insert synthetic CPU metric
+    const cpu_json = "{\"user\":25.50,\"system\":10.30,\"iowait\":2.10,\"idle\":62.10}";
+    try db.insertMetric(ts, "cpu", "", cpu_json);
+
+    // Insert synthetic load metric
+    const load_json = "{\"avg1\":1.50,\"avg5\":0.80,\"avg15\":0.30,\"running\":4,\"total\":300}";
+    try db.insertMetric(ts, "load", "", load_json);
+
+    // Insert synthetic net metric with device
+    const net_json = "{\"rx_bytes\":9876543,\"tx_bytes\":5432109,\"rx_rate\":10000,\"tx_rate\":5000}";
+    try db.insertMetric(ts, "net", "eth0", net_json);
+
+    // Insert synthetic mem metric
+    const mem_json = "{\"total_kb\":16000000,\"available_kb\":8000000,\"used_pct\":50.0}";
+    try db.insertMetric(ts, "mem", "", mem_json);
+
+    db.commit();
+
+    // Verify: count rows via a separate query
+    var count_stmt: ?*c.sqlite3_stmt = null;
+    const count_sql = "SELECT COUNT(*) FROM metrics WHERE ts = ?";
+    try testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.handle, count_sql, -1, &count_stmt, null));
+    defer _ = c.sqlite3_finalize(count_stmt);
+
+    _ = c.sqlite3_bind_int64(count_stmt.?, 1, ts);
+    try testing.expectEqual(c.SQLITE_ROW, c.sqlite3_step(count_stmt.?));
+    const row_count = c.sqlite3_column_int(count_stmt.?, 0);
+    try testing.expectEqual(@as(c_int, 4), row_count);
+
+    // Verify: check a specific row
+    var select_stmt: ?*c.sqlite3_stmt = null;
+    const select_sql = "SELECT json FROM metrics WHERE ts = ? AND kind = 'net' AND device = 'eth0'";
+    try testing.expectEqual(c.SQLITE_OK, c.sqlite3_prepare_v2(db.handle, select_sql, -1, &select_stmt, null));
+    defer _ = c.sqlite3_finalize(select_stmt);
+
+    _ = c.sqlite3_bind_int64(select_stmt.?, 1, ts);
+    try testing.expectEqual(c.SQLITE_ROW, c.sqlite3_step(select_stmt.?));
+
+    const json_ptr = c.sqlite3_column_text(select_stmt.?, 0);
+    const json_result = std.mem.span(json_ptr);
+    try testing.expect(std.mem.indexOf(u8, json_result, "\"rx_rate\":10000") != null);
 }
