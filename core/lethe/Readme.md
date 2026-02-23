@@ -142,4 +142,4 @@ const strings = struct {
 
 ## License
 
-MIT
+GNU GPLv3
