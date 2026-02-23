@@ -1,4 +1,10 @@
-# Zish Shell
+[![Release](https://github.com/kkroesch/zish/actions/workflows/release.yml/badge.svg)](https://github.com/kkroesch/zish/actions/workflows/release.yml)
+
+<center>
+  <img src="logo.png" width="250px">
+</center>
+
+# zish - A Minimal Shell in Zig
 
 A POSIX-ish shell written in Zig with GNU Readline and SQLite-backed persistent state.
 
@@ -76,10 +82,19 @@ The database uses WAL mode for performance and safe concurrent access.
 ### Prerequisites
 
 - Zig >= 0.15.0
-- ~~GNU Readline development headers~~
-- ~~SQLite3 development headers~~
+- GNU Readline development headers
+- SQLite3 development headers
 
-Current version provides Linenoise and SQLite Amalgamate compiled statically to improve portability.
+```bash
+# Fedora
+sudo dnf install readline-devel sqlite-devel
+
+# Debian/Ubuntu
+sudo apt install libreadline-dev libsqlite3-dev
+
+# For static linking (Fedora)
+sudo dnf install readline-static sqlite-static
+```
 
 ### Compile & Run
 

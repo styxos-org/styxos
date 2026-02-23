@@ -1,0 +1,20 @@
+
+# Install requirements needed for building
+requirements:
+	sudo dnf install -y readline-devel sqlite-devel bats
+
+# Build production binary
+build:
+	@zig build -Doptimize=ReleaseSafe
+
+# Run locally
+run:
+	@zig-out/bin/zish
+
+# Run end-to-end tests
+test:
+	@test/basic.bats
+
+# Cleanup
+clean:
+    @rm -rf zig-out .zig-cache
