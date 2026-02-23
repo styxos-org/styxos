@@ -1,0 +1,21 @@
+# Hugo output
+public/
+resources/
+.hugo_build.lock
+
+# Editor
+.vscode/
+.DS_Store
+
+# Obsidian Konfigurationen:
+.obsidian/workspace
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.obsidian/backlinks.json
+.obsidian/daily-notes.json
+.obsidian/templates.json
+.obsidian/graph.json
+.obsidian/starred.json
+content/.obsidian
+
+static/fonts

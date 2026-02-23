@@ -1,0 +1,21 @@
+baseURL = 'https://styxos.org/'
+languageCode = 'en-us'
+title = 'StyxOS Documentation'
+
+[module]
+    [[module.imports]]
+        path = 'github.com/alex-shpak/hugo-book'
+    [[module.mounts]]
+        source = "content"
+        target = "content"
+    [[module.mounts]]
+        source = "../docs"
+        target = "content/docs"
+
+
+[markup.goldmark.renderer]
+    unsafe = true
+
+
+#[server]
+#    port = 1313
