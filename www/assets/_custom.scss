@@ -1,32 +1,32 @@
 @font-face {
   font-family: 'Roboto';
-  src: url('/fonts/Roboto/Roboto-Regular.ttf') format('truetype');
+  src: url('/fonts/Roboto-Regular.ttf') format('truetype');
   font-weight: 400;
 }
 @font-face {
   font-family: 'Roboto';
-  src: url('/fonts/Roboto/Roboto-Bold.ttf') format('truetype');
+  src: url('/fonts/Roboto-Bold.ttf') format('truetype');
   font-weight: 700;
 }
 @font-face {
   font-family: 'STIX Two Text';
-  src: url('/fonts/STIXTwoText/STIXTwoText-Regular.ttf') format('truetype');
+  src: url('/fonts/STIXTwoText-Regular.ttf') format('truetype');
   font-weight: 400;
 }
 @font-face {
   font-family: 'STIX Two Text';
-  src: url('/fonts/STIXTwoText/STIXTwoText-Bold.ttf') format('truetype');
+  src: url('/fonts/STIXTwoText-Bold.ttf') format('truetype');
   font-weight: 700;
 }
 @font-face {
   font-family: 'STIX Two Text';
-  src: url('/fonts/STIXTwoText/STIXTwoText-Italic.ttf') format('truetype');
+  src: url('/fonts/STIXTwoText-Italic.ttf') format('truetype');
   font-weight: 400;
   font-style: italic;
 }
 
 :root {
-  font-size: 17px;
+  font-size: 18px;
 }
 
 body {
