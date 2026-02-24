@@ -8,9 +8,10 @@ title = 'StyxOS Documentation'
     [[module.mounts]]
         source = "content"
         target = "content"
-    [[module.mounts]]
-        source = "../docs"
-        target = "content/docs"
+#    Local link to docs
+#    [[module.mounts]]
+#        source = "../docs"
+#        target = "content/docs"
 
 
 [markup.goldmark.renderer]
