@@ -60,7 +60,7 @@ jobs:
         run: |
           cd www && hugo \
             --gc --minify \
-            --baseURL "${{ steps.pages.outputs.base_url }}/"
+            --baseURL "https://styxos.org/"
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
