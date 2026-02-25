@@ -700,7 +700,7 @@ fn formatMemJson(mem: MemInfo, buf: []u8) ![:0]const u8 {
 // ============================================================================
 
 const Config = struct {
-    db_path: [:0]const u8 = "/var/lib/sysmon/metrics.db",
+    db_path: [:0]const u8 = "/var/metrics.db",
     interval_s: u32 = 5,
     mounts: []const [:0]const u8 = &default_mounts,
     mode: Mode = .collect,
