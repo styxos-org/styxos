@@ -1,6 +1,8 @@
 ---
 title: Kernel
-weight: 10
+weight: 1
 ---
 
+## Kernel Pages
 
+{{< section >}}
