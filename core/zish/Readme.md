@@ -1,8 +1,8 @@
 [![Release](https://github.com/kkroesch/zish/actions/workflows/release.yml/badge.svg)](https://github.com/kkroesch/zish/actions/workflows/release.yml)
 
-<center>
-  <img src="logo.png" width="250px">
-</center>
+<div text-align="center">
+  <img src="logo.png" width="250px"/>
+</div>
 
 # zish - A Minimal Shell in Zig
 
@@ -82,19 +82,10 @@ The database uses WAL mode for performance and safe concurrent access.
 ### Prerequisites
 
 - Zig >= 0.15.0
-- GNU Readline development headers
-- SQLite3 development headers
+- ~~GNU Readline development headers~~
+- ~~SQLite3 development headers~~
 
-```bash
-# Fedora
-sudo dnf install readline-devel sqlite-devel
-
-# Debian/Ubuntu
-sudo apt install libreadline-dev libsqlite3-dev
-
-# For static linking (Fedora)
-sudo dnf install readline-static sqlite-static
-```
+Current version provides Linenoise and SQLite Amalgamate compiled statically to improve portability.
 
 ### Compile & Run
 
