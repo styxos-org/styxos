@@ -1,0 +1,23 @@
+# Charon local zone file
+# Format: name  TYPE  value  [ttl]
+# Lines starting with # or ; are comments
+
+# A records
+gateway.styx.local      A       192.168.1.1
+node01.styx.local       A       192.168.1.10
+node02.styx.local       A       192.168.1.11
+node03.styx.local       A       192.168.1.12
+registry.styx.local     A       192.168.1.20
+
+# AAAA records
+gateway.styx.local      AAAA    fd00::1
+node01.styx.local       AAAA    fd00::10
+
+# CNAME records
+dns.styx.local          CNAME   gateway.styx.local
+ntp.styx.local          CNAME   gateway.styx.local
+
+# TXT records
+node01.styx.local       TXT     role=compute
+node02.styx.local       TXT     role=storage
+registry.styx.local     TXT     v=spf1 -all
