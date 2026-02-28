@@ -18,9 +18,11 @@ weight: 1
 
 3. ## Configure the system
 
-4. ## Build the ISO or QCOW2 Image
+4. ## Compile the Core Components
 
-5. ## Boot the system
+5. ## Build the ISO or QCOW2 Image
+
+6. ## Boot the system
 {{% /steps %}}
 
-{{< button href="https://github.com/alex-shpak/hugo-book" >}}Contribute{{< /button >}}
+{{< button href="https://github.com/styxos-org" >}}Contribute{{< /button >}}
