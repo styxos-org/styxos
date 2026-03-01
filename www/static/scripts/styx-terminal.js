@@ -16,20 +16,21 @@
  *   ></styx-terminal>
  *
  * Attributes:
+ *   src       — URL to a JSON file with commands (takes priority over inline commands)
+ *   commands  — JSON array of {prompt, cmd, output?} objects (inline alternative to src)
  *   speed     — base typing speed in ms (default: 65)
  *   jitter    — random extra ms per keystroke (default: 50)
  *   pause     — pause after typed command in ms (default: 1800)
  *   restart   — pause before loop restart in ms (default: 2500)
  *   theme     — "dark" (default) or "light"
  *   title     — titlebar text (default: "zish — styx")
- *   commands  — JSON array of {prompt, cmd, output?} objects
  *   no-chrome — if present, hides the titlebar/window chrome
  */
 
 class StyxTerminal extends HTMLElement {
 
   static get observedAttributes() {
-    return ['speed', 'jitter', 'pause', 'restart', 'theme', 'title', 'commands', 'no-chrome'];
+    return ['speed', 'jitter', 'pause', 'restart', 'theme', 'title', 'commands', 'src', 'no-chrome'];
   }
 
   constructor() {
@@ -37,6 +38,7 @@ class StyxTerminal extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._running = false;
     this._abortCtrl = null;
+    this._loadedCommands = null; // cached commands from src fetch
   }
 
   // ── Defaults ────────────────────────────────────────────
@@ -72,6 +74,10 @@ class StyxTerminal extends HTMLElement {
       { prompt: 'zish»',  cmd: 'help', output: ' builtins: cd, query, alias, export, set, history, jobs, exit\n type \'help <cmd>\' for details' },
       { prompt: 'zish»',  cmd: 'exit' },
     ];
+
+    // Priority: fetched src > inline commands attribute > defaults
+    if (this._loadedCommands) return this._loadedCommands;
+
     try {
       const attr = this.getAttribute('commands');
       return attr ? JSON.parse(attr) : defaultCmds;
@@ -82,8 +88,20 @@ class StyxTerminal extends HTMLElement {
   }
 
   // ── Lifecycle ───────────────────────────────────────────
-  connectedCallback() {
+  async connectedCallback() {
     this._render();
+
+    const src = this.getAttribute('src');
+    if (src) {
+      try {
+        const resp = await fetch(src);
+        if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+        this._loadedCommands = await resp.json();
+      } catch (err) {
+        console.warn(`<styx-terminal> failed to load ${src}:`, err);
+      }
+    }
+
     this._start();
   }
 
@@ -91,12 +109,28 @@ class StyxTerminal extends HTMLElement {
     this._stop();
   }
 
-  attributeChangedCallback() {
-    if (this.shadowRoot.querySelector('.terminal')) {
-      this._stop();
-      this._render();
-      this._start();
+  async attributeChangedCallback(name) {
+    if (!this.shadowRoot.querySelector('.terminal')) return;
+    this._stop();
+
+    if (name === 'src') {
+      const src = this.getAttribute('src');
+      if (src) {
+        try {
+          const resp = await fetch(src);
+          if (!resp.ok) throw new Error(`${resp.status} ${resp.statusText}`);
+          this._loadedCommands = await resp.json();
+        } catch (err) {
+          console.warn(`<styx-terminal> failed to load ${src}:`, err);
+          this._loadedCommands = null;
+        }
+      } else {
+        this._loadedCommands = null;
+      }
     }
+
+    this._render();
+    this._start();
   }
 
   // ── Render ──────────────────────────────────────────────
@@ -171,6 +205,15 @@ class StyxTerminal extends HTMLElement {
           padding: 20px 22px 28px;
           min-height: 180px;
           line-height: 1.7;
+          text-align: left;
+          display: flex;
+          flex-direction: column;
+          justify-content: flex-end;
+          gap: 0;
+        }
+        .history-line, .active-line {
+          margin: 0;
+          padding: 0;
         }
         .history-line {
           white-space: pre-wrap;
@@ -179,7 +222,7 @@ class StyxTerminal extends HTMLElement {
         .history-line .prompt { color: ${colors.prompt}; font-weight: 700; }
         .history-line .text   { color: ${colors.text}; }
         .history-line .output { color: ${colors.output}; }
-        .active-line { white-space: pre; }
+        .active-line { white-space: pre-wrap; }
         .active-line .prompt { color: ${colors.prompt}; font-weight: 700; }
         .active-line .cmd    { color: ${colors.text}; }
         .cursor {
@@ -197,9 +240,7 @@ class StyxTerminal extends HTMLElement {
       <div class="terminal">
         ${chromeHTML}
         <div class="body">
-          <div class="active-line">
-            <span class="prompt">styx #</span> <span class="cmd"></span><span class="cursor"></span>
-          </div>
+<div class="active-line"><span class="prompt">styx #</span> <span class="cmd"></span><span class="cursor"></span></div>
         </div>
       </div>`;
   }

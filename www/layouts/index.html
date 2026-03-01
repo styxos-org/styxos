@@ -332,41 +332,9 @@
             }
 
             /* ─── Terminal Prompt ─── */
-            .terminal-line {
-                font-family: "IBM Plex Mono", monospace;
-                font-size: 0.82rem;
-                color: var(--dim);
-                margin-top: 4rem;
-                position: relative;
-                z-index: 1;
-                animation: fadeInUp 1s ease-out 1.4s both;
-            }
-
-            .terminal-line .prompt {
-                color: var(--styx-cyan);
-            }
-
-            .terminal-line .cmd {
-                color: var(--light);
-            }
-
-            .terminal-line .cursor {
-                display: inline-block;
-                width: 8px;
-                height: 1.1em;
-                background: var(--styx-cyan);
-                vertical-align: text-bottom;
-                animation: blink 1s step-end infinite;
-            }
-
-            @keyframes blink {
-                0%,
-                100% {
-                    opacity: 1;
-                }
-                50% {
-                    opacity: 0;
-                }
+            styx-terminal {
+                width: 600px;
+                margin-top: 2rem;
             }
 
             /* ─── Sections ─── */
@@ -737,11 +705,7 @@
                     >View Source</a
                 >
             </div>
-            <div class="terminal-line">
-                <span class="prompt">styx #</span>
-                <span class="cmd">zish --version</span
-                ><span class="cursor"></span>
-            </div>
+            <styx-terminal></styx-terminal>
         </section>
 
         <div class="separator"><hr /></div>
@@ -1012,5 +976,6 @@
                 .querySelectorAll(".reveal")
                 .forEach((el) => observer.observe(el));
         </script>
+        <script src="/scripts/styx-terminal.js"></script>
     </body>
 </html>
