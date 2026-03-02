@@ -1,0 +1,15 @@
+busybox_version := "1.36.1"
+build_dir := "./build"
+
+
+build:
+    mkdir {{build_dir}}
+    wget -qnc -P {{build_dir}} https://busybox.net/downloads/busybox-{{busybox_version}}.tar.bz2
+    tar -xf {{build_dir}}/busybox-{{busybox_version}}.tar.bz2 -C ./build 
+    cp config {{build_dir}}/busybox-{{busybox_version}}/.config
+
+    cd {{build_dir}}/busybox-{{busybox_version}} && \
+    make CC=musl-gcc EXTRA_CFLAGS="-idirafter /usr/include" -j$(nproc)
+
+clean:
+    rm -rf {{build_dir}}
