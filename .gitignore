@@ -9,3 +9,7 @@ release/
 debug/
 /docgen_tmp/
 target/
+
+*.db
+*.db-shm
+*.db-wal
