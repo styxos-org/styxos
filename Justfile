@@ -24,8 +24,11 @@ initramfs:
     # Apply the StyxOS overlay
     cp -a overlay/* fs/
 
-    # Pack the archive enforcing root ownership
+
+# Pack the archive enforcing root ownership
+initram:
     cd fs && find . -print0 | cpio --null -ov -H newc --owner=root:root | gzip -9 > ../build/initramfs.cpio.gz
+
 
 # Compile the configured kernel
 kernel:
