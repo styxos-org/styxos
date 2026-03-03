@@ -1,6 +1,4 @@
+# Build for generic x86_64 architecture; see `build.zig`
 build:
-    zig build-exe src/main.zig -target x86_64-linux-musl -mcpu=x86_64 -O ReleaseSafe
-
-install:
-    cp main ../../fs/init
-
+    zig build -Doptimize=ReleaseSafe
+    strip  zig-out/bin/init
