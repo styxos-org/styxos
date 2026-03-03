@@ -1,6 +1,5 @@
 KERNEL_DIR := "kernel/src"
 KERNEL_VERSION := "6.19"
-ALPINE_VERSION := "3.21.2"
 
 # Install Container runtime (crun)
 insruntime:
@@ -10,25 +9,24 @@ insruntime:
 
 # Make customized RAM file system (initramfs)
 initramfs:
-    -mkdir -p build fs
-    wget -nc -P build/ https://dl-cdn.alpinelinux.org/alpine/v3.21/releases/x86_64/alpine-minirootfs-{{ ALPINE_VERSION }}-x86_64.tar.gz || true
+    -rm -rf rootfs
+    mkdir rootfs
+    mkdir -p rootfs/{proc,sys,dev,var,bin,sbin,etc,tmp,usr/bin,usr/sbin}
 
-    # Completely empty fs/ for clean, reproducible builds
-    -rm -rf fs/* fs/.[!.]*
-    tar xf build/alpine-minirootfs-{{ ALPINE_VERSION }}-x86_64.tar.gz -C fs/
-    -rm -rf fs/opt fs/mnt fs/usr/local fs/media
+    # Install Core Components
+    cp core/init/zig-out/bin/init rootfs/init
+    cp -a overlay/* rootfs/
 
-    # Force the init symlink
-    ln -sf sbin/init fs/init
+    # Install Busybox and create symlinks
+    cp core/busybox/build/busybox*/busybox rootfs/bin/
+    for app in $(rootfs/bin/busybox --list-full); do \
+        mkdir -p "rootfs/$(dirname $app)"; \
+        ln -sf /bin/busybox "rootfs/$app"; \
+    done
 
-    # Apply the StyxOS overlay
-    cp -a overlay/* fs/
-
-
-# Pack the archive enforcing root ownership
-initram:
-    cd fs && find . -print0 | cpio --null -ov -H newc --owner=root:root | gzip -9 > ../build/initramfs.cpio.gz
-
+    # Compress initramfs
+    cd rootfs && find . -print0 | cpio --null -ov -H newc --owner=root:root | gzip -9 > ../build/initramfs.cpio.gz
+    cd -
 
 # Compile the configured kernel
 kernel:

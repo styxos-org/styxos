@@ -1,4 +1,5 @@
 const std = @import("std");
+const builtin = @import("builtin");
 
 var child_pid: std.posix.pid_t = -1;
 var is_shutting_down: bool = false;
@@ -82,7 +83,15 @@ pub fn main() void {
             }
 
             if (child_pid == 0) {
-                _ = std.posix.setpgid(0, 0) catch {};
+                if (builtin.mode == .Debug) {
+                    // DEV-Mode: Interactive Shell with Job Control (Ctrl+C)
+                    _ = std.os.linux.syscall0(std.os.linux.SYS.setsid);
+                    _ = std.os.linux.syscall3(std.os.linux.SYS.ioctl, 0, 0x540E, 0); // TIOCSCTTY
+                } else {
+                    // PROD-Mode: Process Group for Daemons (crun)
+                    _ = std.os.linux.syscall2(std.os.linux.SYS.setpgid, 0, 0);
+                }
+
                 const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
                 const envp = [_:null]?[*:0]const u8{ "PATH=/bin:/sbin:/usr/bin:/usr/sbin", null };
 
