@@ -15,6 +15,7 @@ initramfs:
 
     # Install Core Components
     cp core/init/zig-out/bin/init rootfs/init
+    cp core/zish/zig-out/bin/zish rootfs/bin/zish
     cp -a overlay/* rootfs/
 
     # Install Busybox and create symlinks
