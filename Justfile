@@ -7,7 +7,8 @@ insruntime:
     wget -nc -O overlay/usr/bin/crun https://github.com/containers/crun/releases/download/1.26/crun-1.26-linux-amd64
     chmod +x overlay/usr/bin/crun
 
-kvmtool: prepare-headers
+kvmtool:
+    cd vendor/kvmtool && \
     make LDFLAGS="-static" \
          EXTRA_CFLAGS="-Wno-error -Wno-redundant-decls" \
          WERROR=0 \
@@ -67,3 +68,18 @@ run:
         -device virtio-net-pci,netdev=net0 \
         -drive file=var.img,format=raw,if=virtio \
         -append "console=ttyS0 quiet rdinit=/init"
+
+# Run compiled kernel in lkvm
+runkvm:
+    sudo ip tuntap add dev styxtap0 mode tap user $USER
+    sudo ip addr add 10.0.0.1/24 dev styxtap0
+    sudo ip link set styxtap0 up
+
+    vendor/kvmtool/lkvm run \
+        -m 512 \
+        -c 2 \
+        -k build/bzImage \
+        -i build/initramfs.cpio.gz \
+        --console serial \
+        -n mode=tap,tapif=styxtap0,vhost=1 \
+        -p "console=ttyS0 init=/bin/init"
