@@ -7,6 +7,12 @@ insruntime:
     wget -nc -O overlay/usr/bin/crun https://github.com/containers/crun/releases/download/1.26/crun-1.26-linux-amd64
     chmod +x overlay/usr/bin/crun
 
+kvmtool: prepare-headers
+    make LDFLAGS="-static" \
+         EXTRA_CFLAGS="-Wno-error -Wno-redundant-decls" \
+         WERROR=0 \
+         -j$(nproc)
+
 # Make customized RAM file system (initramfs)
 initramfs:
     -rm -rf rootfs
@@ -16,6 +22,7 @@ initramfs:
     # Install Core Components
     cp core/init/zig-out/bin/init rootfs/init
     cp core/zish/zig-out/bin/zish rootfs/bin/zish
+    cp vendor/lkvm/lkvm rootfs/bin/lkvm
     cp -a overlay/* rootfs/
 
     # Install Busybox and create symlinks
