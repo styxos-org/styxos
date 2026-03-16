@@ -5,7 +5,9 @@ weight: 1
 
 # Configuration
 
-The Linux kernel provides a vast of options that can be selected. Many of them are meant to provide a wide range of hardware support and software features. Configuring interactively with `make nconfig` will need a lot of time and research. 
+The Linux kernel provides a vast of options that can be selected. Many of them are meant to provide a wide range of hardware support and software features. Configuring interactively with `make nconfig` will need a lot of time and research.
+
+> "It’s a common misconception to think that there is a separate Linux kernel code base for an enterprise-class server, a data center, a workstation, and a tiny, embedded Linux device – no, they all use the very same unified Linux kernel source! Thus, carefully configuring the kernel for a particular use case (server, desktop, embedded, or hybrid/custom) is a powerful feature and a requirement." -- Kaiwan N. Billimoria in _Linux Kernel Programming_
 
 For a minimal kernel, the best approach is to `make allnoconfig` to deactivate any option. This will probably result in a kernel booting right into a `kernel panic`, because essential drivers are missing.
 
@@ -72,6 +74,12 @@ make allnoconfig
 ./scripts/config --enable BLK_DEV
 ./scripts/config --enable VIRTIO_BLK
 ./scripts/config --enable EXT4_FS
+
+# Hypervisor Features (KVM)
+./scripts/config --enable HYPERVISOR_GUEST
+./scripts/config --enable VIRTUALIZATION
+./scripts/config --enable PARAVIRT
+./scripts/config --enable PARAVIRT_CLOCK
 
 make olddefconfig
 make -j$(nproc)
