@@ -1,0 +1,8 @@
+build:
+    @echo "Building ..."
+    @zig build -Doptimize=ReleaseSmall
+    @SIZE=$(stat -c%s zig-out/bin/lz | numfmt --to=iec) && echo "lz binary size: $SIZE."
+
+test: build
+    @echo "Testing ..."
+    @test/lz.bats
