@@ -1,133 +1,235 @@
+//! StyxOS init — the first userspace process (PID 1).
+//!
+//! Responsibilities:
+//!   1. Mount the base pseudo-filesystems (/proc, /sys, /dev, cgroup2) and /var.
+//!   2. Bind stdin/stdout/stderr to /dev/console.
+//!   3. Run the one-shot setup script (/sbin/setup.sh) for network, time, etc.
+//!   4. Supervise a console shell and reap orphaned (zombie) processes.
+//!   5. On SIGTERM/SIGINT: terminate all processes, sync disks, power off.
+//!
+//! PID 1 must never exit — the kernel panics if init dies. Therefore main()
+//! returns `void` (not `!void`) and every fallible operation is handled
+//! inline; nothing is allowed to propagate up and terminate the process.
+
 const std = @import("std");
-const builtin = @import("builtin");
+const config = @import("config");
+const linux = std.os.linux;
+const posix = std.posix;
 
-var child_pid: std.posix.pid_t = -1;
-var is_shutting_down: bool = false;
+const shell_path = "/bin/sh";
+const setup_script = "/sbin/setup.sh";
 
-fn sig_handler(sig: c_int) callconv(.c) void {
-    is_shutting_down = true;
-    if (child_pid > 0) {
-        _ = std.posix.kill(-child_pid, @intCast(sig)) catch {};
+/// Minimal environment passed to every process init spawns.
+const default_envp = [_:null]?[*:0]const u8{"PATH=/bin:/sbin:/usr/bin:/usr/sbin"};
+
+/// PID of the supervised console shell; -1 while it is not running.
+/// Shared between the main loop and the signal handler, hence atomic.
+var shell_pid = std.atomic.Value(posix.pid_t).init(-1);
+
+/// Set by the signal handler when SIGTERM or SIGINT is received.
+var shutdown_requested = std.atomic.Value(bool).init(false);
+
+/// Shutdown signal handler. Must stay async-signal-safe: only set a flag and
+/// forward the signal; all logging happens in the main loop.
+fn handleShutdownSignal(sig: c_int) callconv(.c) void {
+    shutdown_requested.store(true, .seq_cst);
+    const pid = shell_pid.load(.seq_cst);
+    if (pid > 0) {
+        // Negative PID: deliver to the shell's whole process group.
+        posix.kill(-pid, @intCast(sig)) catch {};
     }
 }
 
-// WICHTIG: void statt !void. PID 1 crasht nicht.
-pub fn main() void {
-    // Base Mounts
-    _ = std.os.linux.mount("none", "/proc", "proc", 0, 0);
-    _ = std.os.linux.mount("none", "/sys", "sysfs", 0, 0);
-    _ = std.os.linux.mount("none", "/dev", "devtmpfs", 0, 0);
+/// Wrapper around the raw mount syscall that returns the errno for logging.
+fn mountFs(source: [*:0]const u8, target: [*:0]const u8, fstype: [*:0]const u8) linux.E {
+    return posix.errno(linux.mount(source, target, fstype, 0, 0));
+}
 
-    // Create device for STDIN, STDOUT and STDERR
-    const O_RDWR: usize = 2;
-    const console_fd = std.os.linux.syscall3(std.os.linux.SYS.open, @intFromPtr("/dev/console\x00"), O_RDWR, 0);
+/// Log a failed mount. E.BUSY is filtered out: it just means the filesystem
+/// is already mounted (e.g. devtmpfs when the kernel has DEVTMPFS_MOUNT set).
+fn warnMountFailure(out: *std.Io.Writer, target: []const u8, err: linux.E) void {
+    if (err == .SUCCESS or err == .BUSY) return;
+    out.print("[WARN] mount {s} failed: {s}\n", .{ target, @tagName(err) }) catch {};
+}
 
-    if (console_fd >= 0) {
-        _ = std.os.linux.syscall2(std.os.linux.SYS.dup2, console_fd, 0); // stdin
-        _ = std.os.linux.syscall2(std.os.linux.SYS.dup2, console_fd, 1); // stdout
-        _ = std.os.linux.syscall2(std.os.linux.SYS.dup2, console_fd, 2); // stderr
-        if (console_fd > 2) {
-            _ = std.os.linux.syscall1(std.os.linux.SYS.close, console_fd);
-        }
-    }
+/// Attach stdin/stdout/stderr to /dev/console. The kernel starts PID 1
+/// without usable stdio unless the boot loader arranged otherwise, so this
+/// must run before anything is printed. Requires /dev to be mounted.
+fn bindConsole() void {
+    const fd = posix.open("/dev/console", .{ .ACCMODE = .RDWR }, 0) catch return;
+    defer if (fd > 2) posix.close(fd);
+    posix.dup2(fd, 0) catch {};
+    posix.dup2(fd, 1) catch {};
+    posix.dup2(fd, 2) catch {};
+}
 
-    var w = std.fs.File.stdout().writer(&.{});
-    const stdout = &w.interface;
-
-    // catch {} schluckt den Fehler, falls die Konsole wider Erwarten nicht bereit ist
-    stdout.writeAll("\n=== StyxOS Init (PID 1) ===\n") catch {};
-
-    // Catch Signals
-    var act: std.posix.Sigaction = .{
-        .handler = .{ .handler = sig_handler },
-        .mask = std.mem.zeroes(std.posix.sigset_t),
-        .flags = std.posix.SA.RESTART,
+/// Run /sbin/setup.sh (network, time, ...) and wait for it to finish.
+/// Failures are logged but never fatal — the system should still come up
+/// enough to give the operator a shell.
+fn runSetupScript(out: *std.Io.Writer) void {
+    const pid = posix.fork() catch {
+        out.writeAll("[WARN] fork failed, skipping " ++ setup_script ++ "\n") catch {};
+        return;
     };
-    std.posix.sigaction(std.posix.SIG.TERM, &act, null);
-    std.posix.sigaction(std.posix.SIG.INT, &act, null);
+    if (pid == 0) {
+        const argv = [_:null]?[*:0]const u8{setup_script};
+        posix.execveZ(setup_script, &argv, &default_envp) catch posix.exit(127);
+    }
+    const result = posix.waitpid(pid, 0);
+    if (posix.W.IFEXITED(result.status)) {
+        const code = posix.W.EXITSTATUS(result.status);
+        if (code != 0) {
+            out.print("[WARN] {s} exited with status {d}\n", .{ setup_script, code }) catch {};
+        }
+    } else {
+        out.print("[WARN] {s} was terminated by a signal\n", .{setup_script}) catch {};
+    }
+}
 
-    // Mounting Cgroups & /var
-    _ = std.posix.mkdir("/sys/fs/cgroup", 0o755) catch {};
-    _ = std.os.linux.mount("none", "/sys/fs/cgroup", "cgroup2", 0, 0);
+/// Fork and exec the console shell. Returns the child PID, or -1 if fork
+/// failed. The `interactive` build option decides the process setup:
+///   - interactive (dev): new session + controlling TTY, so job control
+///     (Ctrl+C, Ctrl+Z) works in the shell.
+///   - non-interactive (prod): own process group, so init can signal the
+///     whole service tree at once via kill(-pid).
+fn spawnShell() posix.pid_t {
+    const pid = posix.fork() catch return -1;
 
-    const var_mount = std.os.linux.mount("/dev/vda", "/var", "ext4", 0, 0);
-    if (var_mount != 0) {
-        stdout.print("[WARN] Failed to mount /dev/vda. Code: {d}\n", .{var_mount}) catch {};
+    if (pid != 0) {
+        if (!config.interactive) {
+            // Also set the process group from the parent side: a shutdown
+            // signal arriving right after fork() can then already be
+            // forwarded to the group (closes a startup race).
+            posix.setpgid(pid, pid) catch {};
+        }
+        return pid;
     }
 
-    // Run Setup Script (Network, Time, etc.)
-    // fork() kann fehlschlagen, wir fangen es mit catch -1 ab
-    const setup_pid = std.posix.fork() catch -1;
-    if (setup_pid == 0) {
-        const argv = [_:null]?[*:0]const u8{ "/sbin/setup.sh", null };
-        const envp = [_:null]?[*:0]const u8{ "PATH=/bin:/sbin:/usr/bin:/usr/sbin", null };
-        std.posix.execveZ("/sbin/setup.sh", &argv, &envp) catch {
-            std.posix.exit(1);
-        };
-    } else if (setup_pid > 0) {
-        // Nur warten, wenn fork() erfolgreich war
-        _ = std.posix.waitpid(setup_pid, 0);
+    // Child
+    if (config.interactive) {
+        // Raw syscall: std.posix.setsid does not compile for libc-less
+        // Linux targets in Zig 0.15.2 (errno type mismatch in std).
+        _ = linux.syscall0(.setsid);
+        _ = linux.ioctl(0, linux.T.IOCSCTTY, 0);
+    } else {
+        posix.setpgid(0, 0) catch {};
     }
 
-    stdout.writeAll("Starting interactive shell on console...\n") catch {};
+    const argv = [_:null]?[*:0]const u8{shell_path};
+    posix.execveZ(shell_path, &argv, &default_envp) catch {
+        // Throttle: if /bin/sh is missing, the parent would otherwise
+        // respawn us in a tight loop.
+        std.Thread.sleep(5 * std.time.ns_per_s);
+        posix.exit(1);
+    };
+}
 
-    // Reaper-Loop with wait4 Syscall
-    while (!is_shutting_down) {
-        if (child_pid <= 0) {
-            child_pid = std.posix.fork() catch -1;
+/// Orderly shutdown: terminate all remaining processes, flush disks, power off.
+fn shutdown(out: *std.Io.Writer) void {
+    out.writeAll("\n[Init] Shutting down...\n") catch {};
 
-            // Verhindert wildes Spinning, falls fork() dauerhaft fehlschlägt
-            if (child_pid < 0) {
+    // From PID 1, kill(-1) signals every process except init itself.
+    // SIGTERM first for a graceful stop, SIGKILL after a grace period.
+    posix.kill(-1, posix.SIG.TERM) catch {};
+    std.Thread.sleep(2 * std.time.ns_per_s);
+    posix.kill(-1, posix.SIG.KILL) catch {};
+
+    // Reap everything so no process outlives this point unaccounted for.
+    var status: u32 = 0;
+    while (true) {
+        const rc = linux.wait4(-1, &status, 0, null);
+        switch (posix.errno(rc)) {
+            .SUCCESS, .INTR => continue,
+            else => break, // ECHILD: all children reaped.
+        }
+    }
+
+    out.writeAll("[Init] Syncing disks.\n") catch {};
+    posix.sync();
+
+    out.writeAll("[Init] Powering off.\n") catch {};
+    _ = linux.reboot(.MAGIC1, .MAGIC2, .POWER_OFF, null);
+}
+
+pub fn main() void {
+    // Base pseudo-filesystems. /dev must exist before the console can be
+    // opened, so the results are kept and reported once logging works.
+    const proc_err = mountFs("none", "/proc", "proc");
+    const sys_err = mountFs("none", "/sys", "sysfs");
+    const dev_err = mountFs("none", "/dev", "devtmpfs");
+
+    bindConsole();
+
+    // Unbuffered writer: every message must reach the console immediately.
+    var stdout_writer = std.fs.File.stdout().writer(&.{});
+    const stdout = &stdout_writer.interface;
+
+    stdout.writeAll("\n=== StyxOS Init (PID 1) ===\n") catch {};
+    warnMountFailure(stdout, "/proc", proc_err);
+    warnMountFailure(stdout, "/sys", sys_err);
+    warnMountFailure(stdout, "/dev", dev_err);
+
+    // Install shutdown handlers. Deliberately without SA_RESTART: the reaper
+    // loop relies on wait4() returning EINTR so it can observe the shutdown
+    // flag even when the shell ignores the forwarded signal.
+    var act: posix.Sigaction = .{
+        .handler = .{ .handler = handleShutdownSignal },
+        .mask = posix.sigemptyset(),
+        .flags = 0,
+    };
+    posix.sigaction(posix.SIG.TERM, &act, null);
+    posix.sigaction(posix.SIG.INT, &act, null);
+
+    // Control groups (v2) and the writable data partition.
+    posix.mkdir("/sys/fs/cgroup", 0o755) catch {};
+    warnMountFailure(stdout, "/sys/fs/cgroup", mountFs("none", "/sys/fs/cgroup", "cgroup2"));
+    warnMountFailure(stdout, "/var", mountFs("/dev/vda", "/var", "ext4"));
+
+    runSetupScript(stdout);
+
+    stdout.writeAll("Starting shell on console...\n") catch {};
+
+    // Main supervise-and-reap loop. As PID 1, init inherits every orphaned
+    // process in the system, so the blocking wait4(-1) below doubles as the
+    // zombie reaper.
+    while (!shutdown_requested.load(.seq_cst)) {
+        if (shell_pid.load(.seq_cst) <= 0) {
+            const pid = spawnShell();
+            if (pid < 0) {
+                // fork() keeps failing — back off instead of spinning.
                 std.Thread.sleep(std.time.ns_per_s);
-                continue;
+            } else {
+                shell_pid.store(pid, .seq_cst);
             }
-
-            if (child_pid == 0) {
-                if (builtin.mode == .Debug) {
-                    // DEV-Mode: Interactive Shell with Job Control (Ctrl+C)
-                    _ = std.os.linux.syscall0(std.os.linux.SYS.setsid);
-                    _ = std.os.linux.syscall3(std.os.linux.SYS.ioctl, 0, 0x540E, 0); // TIOCSCTTY
-                } else {
-                    // PROD-Mode: Process Group for Daemons (crun)
-                    _ = std.os.linux.syscall2(std.os.linux.SYS.setpgid, 0, 0);
-                }
-
-                const argv = [_:null]?[*:0]const u8{ "/bin/sh", null };
-                const envp = [_:null]?[*:0]const u8{ "PATH=/bin:/sbin:/usr/bin:/usr/sbin", null };
-
-                std.posix.execveZ("/bin/sh", &argv, &envp) catch {
-                    std.Thread.sleep(std.time.ns_per_s * 5);
-                    std.posix.exit(1);
-                };
-            }
+            // Re-check the shutdown flag before blocking in wait4(): a
+            // signal that arrived while spawning would otherwise be missed.
+            continue;
         }
 
+        // Deliberately the raw syscall: std.posix.wait4 swallows EINTR and
+        // treats ECHILD as unreachable — both are states this loop needs.
         var status: u32 = 0;
-        const rc = std.os.linux.wait4(-1, &status, 0, null);
-
-        switch (std.posix.errno(rc)) {
+        const rc = linux.wait4(-1, &status, 0, null);
+        switch (posix.errno(rc)) {
             .SUCCESS => {
-                const reaped_pid: std.posix.pid_t = @intCast(rc);
-                if (reaped_pid == child_pid) {
-                    if (!is_shutting_down) {
-                        stdout.writeAll("[INFO] Shell exited. Respawning...\n") catch {};
-                        child_pid = -1;
-                    }
+                const reaped: posix.pid_t = @intCast(rc);
+                if (reaped == shell_pid.load(.seq_cst) and !shutdown_requested.load(.seq_cst)) {
+                    stdout.writeAll("[INFO] Shell exited. Respawning...\n") catch {};
+                    shell_pid.store(-1, .seq_cst);
                 }
             },
+            // No children at all — should not happen while the shell runs,
+            // but avoid a busy loop and let the next iteration respawn it.
             .CHILD => {
-                // ECHILD: No Zombies, just take a nap.
+                shell_pid.store(-1, .seq_cst);
                 std.Thread.sleep(std.time.ns_per_s);
             },
-            else => continue, // Ignore EINTR
+            // A signal (usually the shutdown request) interrupted wait4 —
+            // fall through and re-evaluate the loop condition.
+            .INTR => {},
+            else => std.Thread.sleep(std.time.ns_per_s),
         }
     }
 
-    // Shutdown Sequence
-    stdout.writeAll("\n[Init] Shutting down... syncing disks.\n") catch {};
-    _ = std.os.linux.syscall0(std.os.linux.SYS.sync);
-
-    // QEMU/Kernel clean exit
-    stdout.writeAll("[Init] Powering off.\n") catch {};
-    _ = std.os.linux.syscall4(std.os.linux.SYS.reboot, 0xfee1dead, 672274793, 0x4321fedc, 0);
+    shutdown(stdout);
 }
