@@ -1,4 +1,17 @@
-# Build for generic x86_64 architecture; see `build.zig`
+# Workaround: on macOS, zig 0.15.2's build runner fails to link against very
+# new SDKs (e.g. macOS 26's MacOSX26.5.sdk) — "undefined symbol: _fork" etc.
+# Forcing an older SDK fixes it. Cross-compiling the actual init binary for
+# Linux is unaffected either way. Drop this once the local zig/SDK pairing
+# is fixed, or once the project moves to a zig version built against the
+# newer SDK.
+sdk_env := if os() == "macos" { "SDKROOT=/Library/Developer/CommandLineTools/SDKs/MacOSX15.4.sdk" } else { "" }
+
+# Development build (Debug): shell gets a controlling TTY; see `build.zig`
 build:
-    zig build #-Doptimize=ReleaseSafe
+    {{sdk_env}} zig build
+    strip  zig-out/bin/init
+
+# Production build: optimized, shell runs in a plain process group
+release:
+    {{sdk_env}} zig build -Doptimize=ReleaseSmall -Dinteractive=false
     strip  zig-out/bin/init
