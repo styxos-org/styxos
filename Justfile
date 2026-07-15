@@ -23,7 +23,7 @@ initramfs:
     # Install Core Components
     cp core/init/zig-out/bin/init rootfs/init
     cp core/zish/zig-out/bin/zish rootfs/bin/zish
-    cp vendor/lkvm/lkvm rootfs/bin/lkvm
+    # cp vendor/lkvm/lkvm rootfs/bin/lkvm
     cp -a overlay/* rootfs/
 
     # Install Busybox and create symlinks
@@ -58,7 +58,7 @@ mkvar:
     rm -rf build/var_skel
 
 # Run compiled kernel in QEMU
-run:
+run: initramfs
     qemu-system-x86_64 \
         -kernel build/bzImage \
         -initrd build/initramfs.cpio.gz \
