@@ -1,0 +1,11 @@
+# Build pluto (links the system sqlite3)
+build:
+    zig build -Doptimize=ReleaseSmall
+
+# Run unit tests
+test:
+    zig build test
+
+# Cleanup
+clean:
+    rm -rf zig-out .zig-cache

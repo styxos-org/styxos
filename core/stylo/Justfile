@@ -1,0 +1,11 @@
+# Build stylo (Rust, release profile)
+build:
+    cargo build --release
+
+# Run tests
+test:
+    cargo test
+
+# Cleanup
+clean:
+    cargo clean

@@ -1,6 +1,24 @@
 KERNEL_DIR := "kernel/src"
 KERNEL_VERSION := "6.19"
 
+# Userland projects under core/, each shipping its own Justfile with a `build` recipe
+CORE_PROJECTS := "init zish lz busybox charon lethe pluto stylo"
+
+# Build everything: kernel, core userland and the initramfs image
+all: builddir kernel core initramfs
+
+# Build all userland projects in core/ (delegates to each project's Justfile)
+core:
+    for p in {{CORE_PROJECTS}}; do \
+        echo "==> building core/$p"; \
+        just --justfile "core/$p/Justfile" --working-directory "core/$p" build || exit 1; \
+    done
+
+# Ensure the build output directory exists
+[private]
+builddir:
+    mkdir -p build
+
 # Install Container runtime (crun)
 insruntime:
     -mkdir -p overlay/usr/bin

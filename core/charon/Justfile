@@ -1,0 +1,11 @@
+# Build charon + charonctl (links the system sqlite3)
+build:
+    zig build -Doptimize=ReleaseSmall
+
+# Run end-to-end / unit tests
+test:
+    zig build test
+
+# Cleanup
+clean:
+    rm -rf zig-out .zig-cache
