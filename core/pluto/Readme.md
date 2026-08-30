@@ -1,4 +1,4 @@
-# sysmon
+# Pluto System Monitor
 
 Lightweight system metrics collector written in Zig 0.15.2. Reads kernel
 metrics from `/proc` and `/sys`, stores them in SQLite with JSON payloads.
